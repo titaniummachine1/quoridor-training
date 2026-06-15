@@ -41,12 +41,12 @@ LOG_PATH  = ROOT / "training" / "data" / "benchmarks_log.jsonl"
 LOCAL_BENCHMARKS = [
     # Key: how does grafted compare to plain ace-v13?
     ("grafted-vs-ace-v13-2s",
-     "ace-v13-grafted", "ace-v13",        112, 2.0, "book",
+     "titanium-v14", "ace-v13",        112, 2.0, "book",
      "grafted (cheap-cert + adaptive-TT) vs plain ACE v13"),
 
     # Key: how does our best ACE engine compare to Titanium?
     ("grafted-vs-titanium-2s",
-     "ace-v13-grafted", "titanium",       112, 2.0, "book",
+     "titanium-v14", "titanium",       112, 2.0, "book",
      "our best ACE engine vs Titanium+cert"),
 
     # Isolate: value of cheap-cert alone
@@ -66,21 +66,21 @@ LOCAL_BENCHMARKS = [
 
     # Dead-zone wall prune: does it help grafted?
     ("dz-vs-grafted-2s",
-     "ace-v13-dz",      "ace-v13-grafted",112, 2.0, "book",
+     "ace-v13-dz",      "titanium-v14",112, 2.0, "book",
      "dead-zone prune vs grafted (NPS vs accuracy trade-off)"),
 
     # 5s versions of the two most important matchups (more decisive signal)
     ("grafted-vs-ace-v13-5s",
-     "ace-v13-grafted", "ace-v13",        112, 5.0, "book",
+     "titanium-v14", "ace-v13",        112, 5.0, "book",
      "grafted vs ace-v13 @ 5s (deeper signal than 2s)"),
 
     ("grafted-vs-titanium-5s",
-     "ace-v13-grafted", "titanium",       112, 5.0, "book",
+     "titanium-v14", "titanium",       112, 5.0, "book",
      "grafted vs Titanium @ 5s"),
 
     # Self-play for data diversity (different opening seed spread)
     ("grafted-selfplay-book-2s",
-     "ace-v13-grafted", "ace-v13-grafted",224, 2.0, "book",
+     "titanium-v14", "titanium-v14",224, 2.0, "book",
      "grafted self-play with book openings -- bulk training data"),
 ]
 
@@ -103,33 +103,37 @@ LOCAL_BENCHMARKS = [
 # Keep at 4 so each of OUR engines gets a clean core during ITS think.
 REMOTE_BENCHMARKS = [
     # Ka -- full strength ladder
-    ("grafted-vs-ka-intuition",
-     "ace-v13-grafted", "ka", "intuition", 224, 2.0, 4,
+    # Ka -- full strength ladder (~12s/move server-side computation)
+    # Persistent WS per game avoids ~25s cold-start per move.
+    # Concurrency 2: enough parallelism without overloading the remote server.
+    ("titanium-v14-vs-ka-intuition",
+     "titanium-v14", "ka", "intuition",  32, 2.0, 2,
      "vs Ka intuition (1 visit) -- sanity floor"),
 
-    ("grafted-vs-ka-short",
-     "ace-v13-grafted", "ka", "short",     112, 2.0, 4,
+    ("titanium-v14-vs-ka-short",
+     "titanium-v14", "ka", "short",      32, 2.0, 2,
      "vs Ka short (1000 visits)"),
 
-    ("grafted-vs-ka-medium",
-     "ace-v13-grafted", "ka", "medium",     56, 2.0, 4,
+    ("titanium-v14-vs-ka-medium",
+     "titanium-v14", "ka", "medium",     20, 2.0, 2,
      "vs Ka medium (5000 visits)"),
 
-    ("grafted-vs-ka-long",
-     "ace-v13-grafted", "ka", "long",       32, 2.0, 4,
+    ("titanium-v14-vs-ka-long",
+     "titanium-v14", "ka", "long",       16, 2.0, 2,
      "vs Ka long (20000 visits) -- site Alpha strength"),
 
     # Ishtar -- skip intuition (2 visits, trivially weak)
-    ("grafted-vs-ishtar-short",
-     "ace-v13-grafted", "ishtar", "short",  56, 2.0, 4,
+    # Ishtar uses MCTS with heavy parallelism; moves take 5-30s depending on preset.
+    ("titanium-v14-vs-ishtar-short",
+     "titanium-v14", "ishtar", "short",  32, 2.0, 2,
      "vs Ishtar short (3200 visits, p=32)"),
 
-    ("grafted-vs-ishtar-medium",
-     "ace-v13-grafted", "ishtar", "medium", 24, 2.0, 4,
+    ("titanium-v14-vs-ishtar-medium",
+     "titanium-v14", "ishtar", "medium", 16, 2.0, 2,
      "vs Ishtar medium (200k visits, p=1024)"),
 
-    ("grafted-vs-ishtar-long",
-     "ace-v13-grafted", "ishtar", "long",   12, 2.0, 4,
+    ("titanium-v14-vs-ishtar-long",
+     "titanium-v14", "ishtar", "long",    8, 2.0, 2,
      "vs Ishtar long (1M visits, p=2048) -- site Alpha strength"),
 ]
 
