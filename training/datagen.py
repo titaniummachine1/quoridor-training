@@ -18,7 +18,7 @@ Usage:
 Options:
     --games N       Number of self-play games (default: 200)
     --time S        Seconds per move (default: 0.1)
-    --engine E      Engine variant to self-play (default: ace-v13-grafted)
+    --engine E      Engine variant to self-play (default: titanium-v15)
     --out PATH      Output JSONL file (default: training/data/games.jsonl)
     --min-ply N     Skip positions before this ply (default: 4)
     --max-ply N     Skip positions after this ply (default: 150)
@@ -126,6 +126,62 @@ def games_to_records(games, min_ply, max_ply, sample_rate):
     return records
 
 
+def offset_path_for(src: Path) -> Path:
+    return src.with_suffix(src.suffix + ".ingested_offset")
+
+
+def ingest_incremental(
+    src_path: Path,
+    out_path: Path,
+    min_ply: int = 4,
+    max_ply: int = 150,
+    sample_rate: float = 1.0,
+    tag: str | None = None,
+) -> int:
+    """Append only new GAME/RESULT pairs from src_path into out_path.
+
+    Tracks byte offset in ``<src>.ingested_offset``.  On first run, skips
+    content already present (assumes prior full ingest) so re-deploying does
+    not duplicate records.
+    """
+    src_path = Path(src_path)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not src_path.exists():
+        return 0
+
+    off_path = offset_path_for(src_path)
+    if off_path.exists():
+        offset = int(off_path.read_text(encoding="utf-8").strip() or "0")
+    else:
+        # File may already have been fully ingested by an older end-of-match pass.
+        offset = src_path.stat().st_size
+
+    with open(src_path, encoding="utf-8", errors="replace") as f:
+        f.seek(offset)
+        chunk = f.read()
+        new_offset = f.tell()
+
+    if not chunk.strip():
+        return 0
+
+    games = parse_dump_games(chunk.splitlines())
+    if not games:
+        off_path.write_text(str(new_offset), encoding="utf-8")
+        return 0
+
+    records = games_to_records(games, min_ply, max_ply, sample_rate)
+    with open(out_path, "a", encoding="utf-8") as f:
+        for rec in records:
+            if tag:
+                rec["_src"] = tag
+            f.write(json.dumps(rec) + "\n")
+
+    off_path.write_text(str(new_offset), encoding="utf-8")
+    return len(records)
+
+
 def parse_dump_games(lines):
     """Parse --dump-games output into list of (move_list, outcome) tuples.
 
@@ -159,7 +215,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--games",       type=int,   default=200)
     ap.add_argument("--time",        type=float, default=0.1)
-    ap.add_argument("--engine",      default="ace-v13-grafted")
+    ap.add_argument("--engine",      default="titanium-v15")
     ap.add_argument("--out",         default="training/data/games.jsonl")
     ap.add_argument("--min-ply",     type=int,   default=4)
     ap.add_argument("--max-ply",     type=int,   default=150)
@@ -169,12 +225,26 @@ def main():
     ap.add_argument("--from-file",   default=None, metavar="PATH",
                     help="Read GAME/RESULT lines from this file instead of running a match. "
                          "Appends to --out. Use with self_match.js --save-games.")
+    ap.add_argument("--incremental", default=None, metavar="PATH",
+                    help="Ingest only new bytes from PATH (tracks .ingested_offset sidecar). "
+                         "Safe to call after every game.")
+    ap.add_argument("--tag",         default=None,
+                    help="Source tag stored as _src on each record (for --incremental).")
     ap.add_argument("--append",      action="store_true",
                     help="Append to --out instead of overwriting (implied by --from-file).")
     args = ap.parse_args()
 
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if args.incremental:
+        src = Path(args.incremental)
+        n = ingest_incremental(
+            src, out_path, args.min_ply, args.max_ply, args.sample_rate, tag=args.tag,
+        )
+        if n:
+            print(f"Incremental: +{n} records -> {out_path.name}")
+        sys.exit(0)
 
     if args.from_file:
         # Ingest pre-recorded GAME/RESULT lines (e.g. from self_match.js --save-games).

@@ -1,0 +1,12 @@
+=== Quoridor training data ===
+Updated: 2026-06-15T23:47:13.715459+00:00
+Current engine: titanium-v15  |  Baseline: ace-v13-ti-pure (JS v13 + O1 movegen)
+
+KEY FILES (all under training/data/):
+  Training DB (NNUE records):  all_games.jsonl  (291 records)
+  Strength tracker games:      v15_vs_ti_pure.games
+  Default self-match games:    self_match_games.games
+  Per-benchmark raw games:     benchmarks/*.games
+  Benchmark results log:       benchmarks_log.jsonl
+  This summary:                STATUS.txt
+  Full manifest:               manifest.json

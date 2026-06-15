@@ -32,22 +32,32 @@ from datagen import parse_dump_games, games_to_records
 
 ROOT      = Path(__file__).resolve().parent.parent
 BIN       = ROOT / "engine" / "target" / "release" / "titanium.exe"
+SELF_MATCH = ROOT / "site" / "self_match.js"
 MATCH_JS  = ROOT / "site" / "ishtar_match.js"
 DB_PATH   = ROOT / "training" / "data" / "all_games.jsonl"
 LOG_PATH  = ROOT / "training" / "data" / "benchmarks_log.jsonl"
+BENCH_GAMES_DIR = ROOT / "training" / "data" / "benchmarks"
+
+# Current production engine (Titanium v15).  ace-v13-ti-pure is the JS baseline.
+CURRENT = "titanium-v15"
 
 # ── Local engine benchmarks ───────────────────────────────────────────────────
 # (name, engine_a, engine_b, games, time_s, openings, notes)
 LOCAL_BENCHMARKS = [
-    # Key: how does grafted compare to plain ace-v13?
-    ("grafted-vs-ace-v13-2s",
-     "titanium-v14", "ace-v13",        112, 2.0, "book",
-     "grafted (cheap-cert + adaptive-TT) vs plain ACE v13"),
+    # Primary: how far is v15 beyond the JS v13 baseline?
+    ("v15-vs-ti-pure-5s",
+     CURRENT, "ace-v13-ti-pure", 112, 5.0, "book",
+     "Titanium v15 vs JS v13 baseline (+ O1 movegen only) @ 5s"),
 
-    # Key: how does our best ACE engine compare to Titanium?
-    ("grafted-vs-titanium-2s",
-     "titanium-v14", "titanium",       112, 2.0, "book",
-     "our best ACE engine vs Titanium+cert"),
+    # v15 vs plain ace-v13 (O1 movegen, no cert/TT extras)
+    ("v15-vs-ace-v13-2s",
+     CURRENT, "ace-v13",        112, 2.0, "book",
+     "Titanium v15 vs plain ace-v13 @ 2s"),
+
+    # v15 vs legacy Titanium+cert stack
+    ("v15-vs-titanium-2s",
+     CURRENT, "titanium",       112, 2.0, "book",
+     "Titanium v15 vs Titanium+cert @ 2s"),
 
     # Isolate: value of cheap-cert alone
     ("cert-vs-ace-v13-2s",
@@ -64,24 +74,24 @@ LOCAL_BENCHMARKS = [
      "titanium",        "titanium-plain", 112, 2.0, "book",
      "Titanium+cert vs plain Titanium (value of endgame certificate)"),
 
-    # Dead-zone wall prune: does it help grafted?
-    ("dz-vs-grafted-2s",
-     "ace-v13-dz",      "titanium-v14",112, 2.0, "book",
-     "dead-zone prune vs grafted (NPS vs accuracy trade-off)"),
+    # Dead-zone wall prune vs v15
+    ("dz-vs-v15-2s",
+     "ace-v13-dz",      CURRENT,          112, 2.0, "book",
+     "dead-zone prune vs Titanium v15 (NPS vs accuracy trade-off)"),
 
-    # 5s versions of the two most important matchups (more decisive signal)
-    ("grafted-vs-ace-v13-5s",
-     "titanium-v14", "ace-v13",        112, 5.0, "book",
-     "grafted vs ace-v13 @ 5s (deeper signal than 2s)"),
+    # 5s versions of key matchups
+    ("v15-vs-ace-v13-5s",
+     CURRENT, "ace-v13",        112, 5.0, "book",
+     "Titanium v15 vs ace-v13 @ 5s"),
 
-    ("grafted-vs-titanium-5s",
-     "titanium-v14", "titanium",       112, 5.0, "book",
-     "grafted vs Titanium @ 5s"),
+    ("v15-vs-titanium-5s",
+     CURRENT, "titanium",       112, 5.0, "book",
+     "Titanium v15 vs Titanium+cert @ 5s"),
 
-    # Self-play for data diversity (different opening seed spread)
-    ("grafted-selfplay-book-2s",
-     "titanium-v14", "titanium-v14",224, 2.0, "book",
-     "grafted self-play with book openings -- bulk training data"),
+    # Self-play for data diversity
+    ("v15-selfplay-book-2s",
+     CURRENT, CURRENT,          224, 2.0, "book",
+     "Titanium v15 self-play with book openings — bulk training data"),
 ]
 
 # ── Remote benchmarks (Ka and Ishtar, all time controls) ─────────────────────
@@ -106,39 +116,81 @@ REMOTE_BENCHMARKS = [
     # Ka -- full strength ladder (~12s/move server-side computation)
     # Persistent WS per game avoids ~25s cold-start per move.
     # Concurrency 2: enough parallelism without overloading the remote server.
-    ("titanium-v14-vs-ka-intuition",
-     "titanium-v14", "ka", "intuition",  32, 2.0, 2,
+    ("titanium-v15-vs-ka-intuition",
+     CURRENT, "ka", "intuition",  32, 2.0, 2,
      "vs Ka intuition (1 visit) -- sanity floor"),
 
-    ("titanium-v14-vs-ka-short",
-     "titanium-v14", "ka", "short",      32, 2.0, 2,
+    ("titanium-v15-vs-ka-short",
+     CURRENT, "ka", "short",      32, 2.0, 2,
      "vs Ka short (1000 visits)"),
 
-    ("titanium-v14-vs-ka-medium",
-     "titanium-v14", "ka", "medium",     20, 2.0, 2,
+    ("titanium-v15-vs-ka-medium",
+     CURRENT, "ka", "medium",     20, 2.0, 2,
      "vs Ka medium (5000 visits)"),
 
-    ("titanium-v14-vs-ka-long",
-     "titanium-v14", "ka", "long",       16, 2.0, 2,
+    ("titanium-v15-vs-ka-long",
+     CURRENT, "ka", "long",       16, 2.0, 2,
      "vs Ka long (20000 visits) -- site Alpha strength"),
 
     # Ishtar -- skip intuition (2 visits, trivially weak)
     # Ishtar uses MCTS with heavy parallelism; moves take 5-30s depending on preset.
-    ("titanium-v14-vs-ishtar-short",
-     "titanium-v14", "ishtar", "short",  32, 2.0, 2,
+    ("titanium-v15-vs-ishtar-short",
+     CURRENT, "ishtar", "short",  32, 2.0, 2,
      "vs Ishtar short (3200 visits, p=32)"),
 
-    ("titanium-v14-vs-ishtar-medium",
-     "titanium-v14", "ishtar", "medium", 16, 2.0, 2,
+    ("titanium-v15-vs-ishtar-medium",
+     CURRENT, "ishtar", "medium", 16, 2.0, 2,
      "vs Ishtar medium (200k visits, p=1024)"),
 
-    ("titanium-v14-vs-ishtar-long",
-     "titanium-v14", "ishtar", "long",    8, 2.0, 2,
+    ("titanium-v15-vs-ishtar-long",
+     CURRENT, "ishtar", "long",    8, 2.0, 2,
      "vs Ishtar long (1M visits, p=2048) -- site Alpha strength"),
 ]
 
 
 # ── Local match runner ────────────────────────────────────────────────────────
+
+def run_self_match(engine_a, engine_b, games, time_s, save_path, tag, concurrency=4):
+    """Run pondering self-match; games saved + ingested per-game by self_match.js."""
+    BENCH_GAMES_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "node", str(SELF_MATCH),
+        "--engine-a", engine_a,
+        "--engine-b", engine_b,
+        "--games", str(games),
+        "--time", str(time_s),
+        "--ponder-time", str(time_s),
+        "--concurrency", str(concurrency),
+        "--save-games", str(save_path),
+        "--source-tag", tag,
+    ]
+    result = subprocess.run(cmd, capture_output=True, cwd=str(ROOT))
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    return stdout.splitlines(), stderr
+
+
+def parse_self_match_result(stderr_text):
+    """Parse MATCH_SUMMARY from self_match.js stderr."""
+    result = {}
+    for line in stderr_text.splitlines():
+        m = re.search(
+            r"MATCH_SUMMARY A=(\d+) B=(\d+) DRAWS=(\d+) SCORE=([\d.]+)/(\d+) ELO=([+-]?(?:Infinity|\d+(?:\.\d+)?))",
+            line,
+        )
+        if m:
+            a, b, d, score, n, elo = m.groups()
+            result["a_wins"] = int(a)
+            result["b_wins"] = int(b)
+            result["draws"]  = int(d)
+            result["n"]      = int(n)
+            result["elo"]    = float(elo)
+            result["summary"] = (
+                f"A {a} | B {b} | draws {d}  score {score}/{n}  "
+                f"~{'+' if float(elo) >= 0 else ''}{float(elo):.0f} Elo"
+            )
+    return result
+
 
 def run_match_dump(engine_a, engine_b, games, time_s, openings):
     """Run a local match with --dump-games; return (stdout_lines, stderr_text)."""
@@ -255,35 +307,43 @@ def process_game_records(stdout_lines, tag, db_path, min_ply, max_ply):
 
 def run_local_benchmark(bm, db_path, log_path, min_ply=4, max_ply=150):
     name, eng_a, eng_b, games, time_s, openings, notes = bm
+    save_path = BENCH_GAMES_DIR / f"{name}.games"
+    tag = f"{name}|{eng_a}|{eng_b}|{time_s}s"
     print(f"\n{'='*60}")
     print(f"LOCAL BENCHMARK: {name}")
     print(f"  A={eng_a}  B={eng_b}  games={games}  time={time_s}s  openings={openings}")
+    print(f"  games file: {save_path}")
     print(f"  {notes}")
     print(f"{'='*60}")
 
     t0 = time.time()
-    stdout_lines, stderr = run_match_dump(eng_a, eng_b, games, time_s, openings)
+    _, stderr = run_self_match(eng_a, eng_b, games, time_s, save_path, tag)
     elapsed = time.time() - t0
 
     for line in stderr.splitlines():
         print(" ", line)
 
-    tag = f"{name}|{eng_a}|{eng_b}|{time_s}s"
-    n_records = process_game_records(stdout_lines, tag, db_path, min_ply, max_ply)
+    # self_match.js ingests each game incrementally — no duplicate batch ingest here.
+    from manifest import update_source, count_games_in_file
+    update_source(name, save_path, engine_a=eng_a, engine_b=eng_b)
+    n_games = count_games_in_file(save_path)
 
-    match_result = parse_local_match_result(stderr)
+    match_result = parse_self_match_result(stderr)
     log_entry = {
         "name": name, "type": "local",
         "engine_a": eng_a, "engine_b": eng_b,
         "games": games, "time_s": time_s, "openings": openings,
-        "n_records": n_records, "elapsed_s": round(elapsed, 1), "notes": notes,
+        "games_file": str(save_path),
+        "n_games_saved": n_games,
+        "n_records": "incremental",  # ingested per-game by self_match.js
+        "elapsed_s": round(elapsed, 1), "notes": notes,
         **match_result,
     }
     append_log(log_path, log_entry)
 
     summary = match_result.get("summary", "no result parsed")
     print(f"\n  RESULT: {summary}")
-    print(f"  Elapsed: {elapsed/60:.1f} min  |  {n_records} training records saved")
+    print(f"  Elapsed: {elapsed/60:.1f} min  |  {n_games} games -> {save_path.name} (ingested incrementally)")
     return log_entry
 
 

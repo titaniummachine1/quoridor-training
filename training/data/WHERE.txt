@@ -1,0 +1,30 @@
+Quoridor training data — where everything lives
+==============================================
+
+Check progress first:  STATUS.txt  (auto-updated after each benchmark batch)
+
+ENGINE NAMING
+-------------
+  titanium-v15          Current production engine (NOT "ace v13" — that's just the net base)
+  ace-v13-ti-pure       Measurement baseline: faithful JS v13 + O1 movegen only
+  titanium-v14          Legacy alias for v15 (same binary build)
+  ace-v13-grafted       Legacy alias for v15 (same binary build)
+
+KEY FILES (training/data/)
+--------------------------
+  all_games.jsonl           NNUE training records (append-only, ingested per game)
+  v15_vs_ti_pure.games      Infinite benchmark raw games (v15 vs baseline)
+  self_match_games.games    Default self_match.js output
+  benchmarks/*.games        One raw games file per named benchmark
+  benchmarks_log.jsonl      Historical benchmark results + Elo estimates
+  manifest.json             Machine-readable totals (games counts, running Elo)
+  STATUS.txt                Human-readable summary — read this for progress
+
+HOW TO RUN
+----------
+  run_tests.bat                  One-shot strength test (112 games @ 5s)
+  run_infinite_benchmark.bat     Endless v15 vs baseline + training data
+  python training/run_benchmarks.py --list
+  python training/run_benchmarks.py --only v15-vs-ti-pure-5s
+
+Every match auto-saves games and ingests into all_games.jsonl — no manual steps.

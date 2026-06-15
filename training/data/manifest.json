@@ -1,0 +1,14 @@
+{
+  "paths": {
+    "training_db": "C:\\gitProjects\\Quoridor best AI\\training\\data\\all_games.jsonl",
+    "benchmark_log": "C:\\gitProjects\\Quoridor best AI\\training\\data\\benchmarks_log.jsonl",
+    "strength_tracker_games": "C:\\gitProjects\\Quoridor best AI\\training\\data\\v15_vs_ti_pure.games",
+    "self_match_games": "C:\\gitProjects\\Quoridor best AI\\training\\data\\self_match_games.games",
+    "benchmark_games_dir": "C:\\gitProjects\\Quoridor best AI\\training\\data\\benchmarks"
+  },
+  "sources": {},
+  "strength_tracker": {},
+  "current_engine": "titanium-v15",
+  "baseline_engine": "ace-v13-ti-pure",
+  "updated_at": "2026-06-15T23:47:13.715459+00:00"
+}
