@@ -1,0 +1,31 @@
+web/node_modules/
+web/dist/
+*.log
+
+# Rust build artifacts
+engine/target/
+engine/target-*/
+engine/target_*/
+**/target/
+Cargo.lock.bak
+
+# Secrets & credentials (never commit)
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+secrets.json
+.secrets/
+credentials.json
+*credentials*.json
+*.pem
+*.key
+*.pfx
+*.p12
+id_rsa
+id_rsa.*
+*.kdbx
+.wrangler/
+KA AI DATA/
+
