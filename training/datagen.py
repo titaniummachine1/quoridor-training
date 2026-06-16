@@ -106,6 +106,26 @@ def insert_games(conn: sqlite3.Connection, games: list, src_id: int):
     conn.commit()
 
 
+def insert_single_game(
+    moves: list[str],
+    outcome: int,
+    out_path: Path | None = None,
+    tag: str | None = None,
+) -> int:
+    """Insert one game row; returns games.id."""
+    out_path = Path(out_path or DB_PATH)
+    conn = open_db(out_path, write=True)
+    src_id = _get_or_create_src(conn, tag or "")
+    cur = conn.execute(
+        "INSERT INTO games(src_id, outcome, moves) VALUES (?, ?, ?)",
+        (src_id, outcome, " ".join(moves)),
+    )
+    conn.commit()
+    gid = int(cur.lastrowid)
+    conn.close()
+    return gid
+
+
 def load_games_from_db(path: Path) -> list[tuple[list[str], int, str]]:
     """Return [(moves: list[str], outcome: int, src: str), ...] for all games."""
     conn = open_db(path)

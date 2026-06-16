@@ -1,11 +1,20 @@
 === Quoridor training data ===
-Updated: 2026-06-16T10:11:57.300327+00:00
+Updated: 2026-06-16T10:26:33.698096+00:00
 Anchor: ace-v13-ti-pure@5s = 1400 Elo
 
 KEY FILES (training/data/):
-  Training DB:     all_games.db  (225 games)
+  Training DB:     all_games.db  (228 games)
   Elo manifest:    manifest.json
   This summary:    STATUS.txt
 
+SWISS TOURNAMENT (overnight):
+  Round ?  last: ? (?)
+  Next: ?
+
 GLOBAL RATING LADDER (~Quoridor Pro scale, anchor 1400; direct H2H is more precise per pairing):
-  #1  ace-v13-ti-pure@5s               1400 Elo  0-0 (0g, ? win)  [anchor]  [prov]
+  #1  ace-v13-ti-pure@5s               1400 Elo  1-1 (2g, 50% win)  [anchor]  [prov]
+  #2  titanium-v15@5s                  1400 Elo  1-1 (2g, 50% win)  [prov]
+  >> titanium-v15@5s = 1400 Elo (+0 vs anchor)
+
+MATCHUP DETAILS (direct W/L → Elo diff):
+  titanium-v15 vs ace-v13-ti-pure (5s): 1-1 / 2g  ~-0 diff (±69%) [random-titanium-v15-vs-ace-v13-ti-pure-5s-79d1a5ba]

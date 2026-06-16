@@ -1,0 +1,37 @@
+{
+  "updated_at": "2026-06-16T10:28:16.137Z",
+  "note": "Think times from live probe; bootstrap for fair-time before first remote move.",
+  "availability": {
+    "ka": true,
+    "ishtar": false
+  },
+  "timings": {
+    "ishtar": {},
+    "ka": {
+      "intuition": {
+        "think_sec": 0.4,
+        "max_think_sec": 24,
+        "think_ms": 364,
+        "samples": 366
+      },
+      "short": {
+        "think_sec": 8.2,
+        "max_think_sec": 10.6,
+        "think_ms": 8182,
+        "samples": 20
+      },
+      "medium": {
+        "think_sec": 11.8,
+        "max_think_sec": 13.5,
+        "think_ms": 11833,
+        "samples": 15
+      },
+      "long": {
+        "think_sec": 20,
+        "max_think_sec": 100.8,
+        "think_ms": 19955,
+        "samples": 25
+      }
+    }
+  }
+}

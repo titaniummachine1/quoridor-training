@@ -1,7 +1,7 @@
 @echo off
 :: Quoridor strength test — Titanium v15 (current) vs ace-v13-ti-pure (JS v13 baseline)
 :: 112 games, 5s/move, 4 concurrent. Games auto-saved + ingested for NNUE training.
-:: Progress: training\data\STATUS.txt
+:: Progress: training\data\STATUS.txt  (cumulative Elo, all runs combined)
 :: Override any option, e.g.:
 ::   run_tests.bat --time 2
 ::   run_tests.bat --games 32

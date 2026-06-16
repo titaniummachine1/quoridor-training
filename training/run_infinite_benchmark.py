@@ -98,7 +98,6 @@ def main():
     totals = manifest.get("strength_tracker", {})
     cum_a = totals.get("a_wins", 0)
     cum_b = totals.get("b_wins", 0)
-    cum_d = totals.get("draws", 0)
     batch_num = totals.get("batches_completed", 0)
 
     status_path = ROOT / "training" / "data" / "STATUS.txt"
@@ -109,7 +108,7 @@ def main():
     print(f"  games file: {GAMES_FILE}")
     print(f"  training DB: {PATHS['training_db']}")
     print(f"  progress:    {status_path}")
-    print(f"  starting score: {args.engine_a} {cum_a} - {cum_b} {args.engine_b}  ({cum_d} draws)")
+    print(f"  starting score: {args.engine_a} {cum_a} - {cum_b} {args.engine_b}  ({cum_a + cum_b} games)")
     print("  Ctrl+C to stop")
     print("=" * 60)
 
@@ -128,18 +127,17 @@ def main():
             continue
 
         if summary:
-            cum_a += summary["a_wins"]
-            cum_b += summary["b_wins"]
-            cum_d += summary["draws"]
-        n = cum_a + cum_b + cum_d or 1
-        score = cum_a + 0.5 * cum_d
-        p = score / n
+            # self_match.js already persists cumulative totals to manifest each game.
+            cum_a = summary["a_wins"]
+            cum_b = summary["b_wins"]
+        n = cum_a + cum_b or 1
+        p = cum_a / n
         elo = -400 * math.log10((1 - p) / p) if 0 < p < 1 else (9999 if p >= 1 else -9999)
         elapsed = time.time() - t0
 
-        update_strength_tracker(cum_a, cum_b, cum_d, batch=batch_num, elo=elo)
+        update_strength_tracker(cum_a, cum_b, batch=batch_num)
         print(
-            f"CUMULATIVE: {args.engine_a} {cum_a} - {cum_b} {args.engine_b}  ({cum_d} draws)  "
+            f"CUMULATIVE: {args.engine_a} {cum_a} - {cum_b} {args.engine_b}  "
             f"/ {n} games  ~{elo:+.0f} Elo vs baseline  ({elapsed/60:.1f} min this batch)"
         )
 

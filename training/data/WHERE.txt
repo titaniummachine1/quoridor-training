@@ -12,19 +12,31 @@ ENGINE NAMING
 
 KEY FILES (training/data/)
 --------------------------
-  all_games.jsonl           NNUE training records (append-only, ingested per game)
+  all_games.db              Game sequences for training (SQLite, ingested per game)
   v15_vs_ti_pure.games      Infinite benchmark raw games (v15 vs baseline)
   self_match_games.games    Default self_match.js output
   benchmarks/*.games        One raw games file per named benchmark
   benchmarks_log.jsonl      Historical benchmark results + Elo estimates
-  manifest.json             Machine-readable totals (games counts, running Elo)
-  STATUS.txt                Human-readable summary — read this for progress
+  manifest.json             Elo matchups + global rating ladder
+  STATUS.txt                Global ladder (1600-scale) + matchup details
+
+ELO SYSTEM
+----------
+  Per matchup: only W/L counts (+1 per game). Settings stored as engine@tc
+    e.g. titanium-v15@5s  vs  ace-v13-ti-pure@5s
+         titanium-v15@2s  vs  ishtar@long
+  Direct diff: from W/L ratio (~+80 Elo style)
+  Global ladder: anchor ace-v13-ti-pure@5s = 1600, naive propagation
+    → see 1612 vs 1600 not just "+12". Ishtar/Ka linked when you play them.
 
 HOW TO RUN
 ----------
-  run_tests.bat                  One-shot strength test (112 games @ 5s)
-  run_infinite_benchmark.bat     Endless v15 vs baseline + training data
+  run_overnight.bat              Swiss tournament (all matchups, cycles overnight)
+  python training/run_swiss_overnight.py --list   Show pairing queue
+  run_tests.bat                  One-shot v15 vs ti-pure (112 games)
+  run_infinite_benchmark.bat     Endless v15 vs baseline only
   python training/run_benchmarks.py --list
-  python training/run_benchmarks.py --only v15-vs-ti-pure-5s
 
-Every match auto-saves games and ingests into all_games.jsonl — no manual steps.
+ELO: direct head-to-head diff = most precise for THAT pairing.
+     global ladder (1600-scale) = best for ranking whole field (naive propagation).
+

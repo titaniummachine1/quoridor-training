@@ -1,16 +1,13 @@
 @echo off
-:: Overnight: titanium-v15 vs ace-v13-ti-pure (JS v13 + O1 movegen baseline)
-:: Runs until you close the window or press Ctrl+C.
-:: Every completed game is saved immediately — no data lost on exit.
+:: Random overnight: 4 different matchups in parallel, one progress bar each.
 ::
-:: Results:  training\data\overnight.games  (raw GAME/RESULT lines)
-::           training\data\all_games.db     (training DB, auto-updated per game)
-:: Progress: check the window — one line per game with running score + Elo
+:: Local @5s:  every pair (v15, ti-pure, ace-v13, titanium)
+:: Remote:      v15@5s vs Ka @ Alpha — all time presets (+ Ishtar when up)
+::
+:: Scoreboard prints after each batch. Also: scoreboard.bat
+::
+:: Preview matchups:  python training\run_swiss_overnight.py --list
 
 setlocal
 cd /d "%~dp0"
-
-set GAMES=training\data\overnight.games
-node site\self_match.js --games 9999 --time 5 --concurrency 4 ^
-  --engine-a titanium-v15 --engine-b ace-v13-ti-pure ^
-  --save-games "%GAMES%" --source-tag overnight-v15-vs-ti-pure %*
+python training\run_swiss_overnight.py %*
