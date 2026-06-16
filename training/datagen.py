@@ -43,15 +43,63 @@ Options:
 
 import argparse
 import json
+import os
 import sqlite3
 import subprocess
 import sys
 import random
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT    = Path(__file__).resolve().parent.parent
 BIN     = ROOT / "engine" / "target" / "release" / "titanium.exe"
 DB_PATH = ROOT / "training" / "data" / "all_games.db"
+EVAL_BATCH_LOCK = ROOT / "training" / "data" / "eval_batch.lock"
+EVAL_BATCH_LOCK_TIMEOUT_SEC = float(os.environ.get("NNUE_EVAL_BATCH_LOCK_SEC", "300"))
+EVAL_BATCH_TIMEOUT_SEC = float(os.environ.get("NNUE_EVAL_BATCH_TIMEOUT_SEC", "180"))
+
+
+@contextmanager
+def _eval_batch_lock():
+    """One eval-batch titanium at a time — avoids 8th process crashing beside 7 game slots."""
+    EVAL_BATCH_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + EVAL_BATCH_LOCK_TIMEOUT_SEC
+    fd = None
+    while time.time() < deadline:
+        try:
+            fd = open(EVAL_BATCH_LOCK, "x")
+            fd.write(str(os.getpid()))
+            fd.flush()
+            break
+        except FileExistsError:
+            time.sleep(2.0)
+    else:
+        raise TimeoutError(
+            f"eval-batch lock busy after {EVAL_BATCH_LOCK_TIMEOUT_SEC:.0f}s "
+            f"(7 game slots may be saturating CPU — will retry next game)"
+        )
+    try:
+        yield
+    finally:
+        if fd is not None:
+            fd.close()
+        EVAL_BATCH_LOCK.unlink(missing_ok=True)
+
+from field_planes import (
+    CHOKE_P0,
+    CHOKE_P1,
+    CONTESTED,
+    CORRIDOR_DELTA_P0,
+    CORRIDOR_DELTA_P1,
+    GOAL_INV_P0,
+    GOAL_INV_P1,
+    PATH_CROSS_P0,
+    PATH_CROSS_P1,
+    PAWN_FWD_P0,
+    PAWN_FWD_P1,
+    rec_field,
+)
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -106,13 +154,32 @@ def insert_games(conn: sqlite3.Connection, games: list, src_id: int):
     conn.commit()
 
 
+MIN_PLIES_DB = 8
+
+
+def validate_game(moves: list[str], outcome: int) -> str | None:
+    """Return error string if game must not be stored (partial / polluted)."""
+    if not isinstance(moves, list) or len(moves) < MIN_PLIES_DB:
+        n = len(moves) if isinstance(moves, list) else 0
+        return f"too few plies ({n} < {MIN_PLIES_DB})"
+    if outcome not in (1, -1):
+        return "outcome must be +1 or -1"
+    for m in moves:
+        if not isinstance(m, str) or not m.strip():
+            return "invalid move token"
+    return None
+
+
 def insert_single_game(
     moves: list[str],
     outcome: int,
     out_path: Path | None = None,
     tag: str | None = None,
 ) -> int:
-    """Insert one game row; returns games.id."""
+    """Insert one game row; returns games.id. Raises ValueError if invalid."""
+    err = validate_game(moves, outcome)
+    if err:
+        raise ValueError(err)
     out_path = Path(out_path or DB_PATH)
     conn = open_db(out_path, write=True)
     src_id = _get_or_create_src(conn, tag or "")
@@ -136,6 +203,51 @@ def load_games_from_db(path: Path) -> list[tuple[list[str], int, str]]:
     ).fetchall()
     conn.close()
     return [(row["moves"].split(), row["outcome"], row["name"]) for row in rows]
+
+
+def load_games_by_ids(path: Path, ids: list[int]) -> list[tuple[list[str], int, str]]:
+    """Load specific games by SQLite row id (for per-game incremental training)."""
+    if not ids:
+        return []
+    conn = open_db(path)
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT g.id, g.moves, g.outcome, s.name "
+        f"FROM games g JOIN sources s ON s.id = g.src_id "
+        f"WHERE g.id IN ({placeholders}) ORDER BY g.id",
+        ids,
+    ).fetchall()
+    conn.close()
+    return [(row["moves"].split(), row["outcome"], row["name"]) for row in rows]
+
+
+def max_game_id(path: Path | None = None) -> int:
+    path = Path(path or DB_PATH)
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(str(path))
+    try:
+        row = conn.execute("SELECT COALESCE(MAX(id), 0) FROM games").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def untrained_game_ids(path: Path, after_id: int) -> list[int]:
+    """Row ids in games table strictly greater than after_id."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    conn = sqlite3.connect(str(path))
+    try:
+        rows = conn.execute(
+            "SELECT id FROM games WHERE id > ? ORDER BY id",
+            (after_id,),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
+    finally:
+        conn.close()
 
 
 def db_stats(path: Path) -> dict:
@@ -163,11 +275,14 @@ def run_match(engine: str, games: int, time_s: float, openings: str) -> list[str
 def eval_batch(all_move_lists: list[list[str]]) -> list[dict]:
     """Run all move sequences through `titanium eval-batch`; returns one JSON dict per position."""
     stdin_text = "\n".join(" ".join(m) if m else "" for m in all_move_lists) + "\n"
-    result = subprocess.run(
-        [str(BIN), "eval-batch"],
-        input=stdin_text.encode("utf-8"),
-        capture_output=True, check=True,
-    )
+    with _eval_batch_lock():
+        result = subprocess.run(
+            [str(BIN), "eval-batch"],
+            input=stdin_text.encode("utf-8"),
+            capture_output=True,
+            check=True,
+            timeout=EVAL_BATCH_TIMEOUT_SEC,
+        )
     return [json.loads(l) for l in result.stdout.decode("utf-8", errors="replace").splitlines() if l.strip()]
 
 
@@ -184,8 +299,8 @@ def expand_games(
     single subprocess invocation.
 
     Returns a list of record dicts with the same keys that QuoridorDataset
-    expects (d0, d1, d0_field, d1_field, hw, vw, pawn0, pawn1, wl0, wl1,
-    corridor_width0, corridor_width1, turn, outcome, ply, _src).
+    expects (d0, d1, goal_inv_p0_field, pawn_fwd_p0_field, …, hw, vw,
+    pawn0, pawn1, wl0, wl1, corridor_width0, corridor_width1, turn, outcome, ply, _src).
     """
     entries = []
     for moves, outcome, src in games:
@@ -202,12 +317,16 @@ def expand_games(
     records = []
     for (move_prefix, outcome, src), rec in zip(entries, evals):
         ply = len(move_prefix)
-        d0f = rec.get("d0_field", [])
-        d1f = rec.get("d1_field", [])
+        gi0 = rec_field(rec, GOAL_INV_P0)
+        gi1 = rec_field(rec, GOAL_INV_P1)
         p0  = rec.get("pawn0", 0)
         p1  = rec.get("pawn1", 0)
-        d0  = d0f[p0] if d0f else rec.get("d0", 0)
-        d1  = d1f[p1] if d1f else rec.get("d1", 0)
+        d0  = gi0[p0] if gi0 and p0 < len(gi0) else rec.get("d0", 0)
+        d1  = gi1[p1] if gi1 and p1 < len(gi1) else rec.get("d1", 0)
+        if "legal_wall_count" not in rec:
+            raise RuntimeError(
+                f"eval-batch missing legal_wall_count at ply {ply} — rebuild native titanium"
+            )
         records.append({
             "_src":            src,
             "ply":             ply,
@@ -219,10 +338,20 @@ def expand_games(
             "wl1":             rec.get("wl1", 0),
             "d0":              d0,
             "d1":              d1,
-            "d0_field":        d0f,
-            "d1_field":        d1f,
-            "corridor_width0": sum(1 for v in d0f if v == d0),
-            "corridor_width1": sum(1 for v in d1f if v == d1),
+            "legal_wall_count": int(rec["legal_wall_count"]),
+            GOAL_INV_P0:       gi0,
+            GOAL_INV_P1:       gi1,
+            PAWN_FWD_P0:       rec_field(rec, PAWN_FWD_P0),
+            PAWN_FWD_P1:       rec_field(rec, PAWN_FWD_P1),
+            CORRIDOR_DELTA_P0: rec_field(rec, CORRIDOR_DELTA_P0),
+            CORRIDOR_DELTA_P1: rec_field(rec, CORRIDOR_DELTA_P1),
+            PATH_CROSS_P0:     rec_field(rec, PATH_CROSS_P0),
+            PATH_CROSS_P1:     rec_field(rec, PATH_CROSS_P1),
+            CHOKE_P0:          rec_field(rec, CHOKE_P0),
+            CHOKE_P1:          rec_field(rec, CHOKE_P1),
+            CONTESTED:         rec_field(rec, CONTESTED),
+            "corridor_width0": sum(1 for v in gi0 if v == d0),
+            "corridor_width1": sum(1 for v in gi1 if v == d1),
             "hw":              rec.get("hw", []),
             "vw":              rec.get("vw", []),
         })

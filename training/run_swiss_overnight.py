@@ -3,7 +3,7 @@
 Four independent game slots run forever; each slot claims the next pairing as
 soon as it finishes (no waiting for slow Ka games). One Node process + progress dock.
 
-Anchor: ace-v13-ti-pure@5s = 1400 Elo (~Quoridor Pro default player).
+Anchor: ace-v13@5s = 1200 Elo (JS v13; ti-pure Rust is stronger, not the anchor).
 
 Usage:
     python training/run_swiss_overnight.py
@@ -17,8 +17,11 @@ import argparse
 import json
 import os
 import platform
+import queue
+import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -29,15 +32,32 @@ sys.path.insert(0, str(ROOT / "training"))
 from manifest import (  # noqa: E402
     load_manifest,
     save_manifest,
+    ANCHOR_ENTITY,
     ANCHOR_RATING,
     format_scoreboard,
     compute_global_ratings,
 )
+from nnue_guards import DEPLOY_EVERY_GAMES, HALFPW_WEIGHT_BYTES, net_weights_size_ok  # noqa: E402
 from swiss_tournament import (  # noqa: E402
     PARALLEL_MATCHUPS,
     Pairing,
     list_pairings,
 )
+
+WEIGHTS = ROOT / "engine" / "src" / "acev13" / "net_weights.bin"
+
+
+def preflight_weights() -> bool:
+    if not WEIGHTS.exists():
+        print(f"ERROR: missing {WEIGHTS} — run training/extend_field_planes.py")
+        return False
+    if not net_weights_size_ok(WEIGHTS):
+        print(
+            f"ERROR: {WEIGHTS.name} is {WEIGHTS.stat().st_size} B, "
+            f"expected {HALFPW_WEIGHT_BYTES} B — run training/extend_field_planes.py"
+        )
+        return False
+    return True
 
 OVERNIGHT_BATCH = ROOT / "site" / "overnight_batch.js"
 COORD_SCRIPT = ROOT / "training" / "coordinator.py"
@@ -174,29 +194,65 @@ def stop_coordinator() -> None:
     _coord_proc = None
 
 
-def run_pool(slots: int) -> int:
+def run_pool(slots: int, *, enable_train: bool = True) -> int:
     """Long-lived Node pool — slots claim pairings independently via coordinator."""
     cmd = ["node", str(OVERNIGHT_BATCH), "--pool", "--slots", str(slots)]
     env = os.environ.copy()
     env.setdefault("COORDINATOR_URL", coordinator_url())
     print(f"  >> {' '.join(cmd)}", flush=True)
-    if sys.stderr.isatty():
-        return subprocess.run(cmd, cwd=str(ROOT), env=env).returncode
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(ROOT),
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        # stderr must stay on the terminal — ProgressBoard uses alternate screen on stderr.
         text=True,
         bufsize=1,
     )
+
+    pool_done_re = re.compile(r"^POOL_DONE db_id=(\d+)")
+    train_q: queue.Queue[int | None] = queue.Queue()
+    train_stop = threading.Event()
+
+    def train_worker() -> None:
+        os.environ["NNUE_POOL_QUIET"] = "1"
+        from run_nnue_cycle import startup_train_catch_up, run_on_game
+
+        startup_train_catch_up()
+        while not train_stop.is_set():
+            try:
+                item = train_q.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            if item is None:
+                train_q.task_done()
+                break
+            try:
+                run_on_game(item)
+            except Exception as e:
+                from nnue_guards import nnue_log
+                nnue_log(f"error on game {item}: {e}")
+            train_q.task_done()
+
+    if enable_train:
+        threading.Thread(target=train_worker, daemon=True).start()
+
     assert proc.stdout is not None
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-    proc.wait()
-    return proc.returncode
+    rc = 0
+    try:
+        for line in proc.stdout:
+            stripped = line.strip()
+            if enable_train:
+                m = pool_done_re.match(stripped)
+                if m:
+                    train_q.put(int(m.group(1)))
+        rc = proc.wait()
+    finally:
+        train_stop.set()
+        if enable_train:
+            train_q.put(None)
+    return rc
 
 
 def main():
@@ -207,10 +263,15 @@ def main():
                     help=f"Independent game slots (default {PARALLEL_MATCHUPS})")
     ap.add_argument("--batches", type=int, default=0,
                     help="(legacy) ignored in pool mode")
+    ap.add_argument("--no-train", action="store_true",
+                    help="Disable background HalfPW NNUE training")
     args = ap.parse_args()
 
     if not BIN.exists():
         print(f"ERROR: build engine first: {BIN}")
+        sys.exit(1)
+
+    if not args.list and not args.scoreboard and not preflight_weights():
         sys.exit(1)
 
     if args.list:
@@ -218,7 +279,7 @@ def main():
         print(f"{'#':<4} {'PAIRING':<36} {'GAMES':>6}  KIND")
         for i, (p, n, _tag) in enumerate(list_pairings(), 1):
             print(f"{i:<4} {p.label:<36} {n:>6}  {p.kind}")
-        print(f"\nAnchor: ace-v13-ti-pure@5s = {int(ANCHOR_RATING)}")
+        print(f"\nAnchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
         return
 
     if args.scoreboard:
@@ -231,16 +292,21 @@ def main():
     print("=" * 64)
     print("RANDOM OVERNIGHT TOURNAMENT  (continuous pool)")
     print(f"  {args.parallel} independent slots — next pairing when each game finishes")
-    print(f"  Baseline anchor: ace-v13-ti-pure@5s = {int(ANCHOR_RATING)}")
-    print("  Ponder on; Ka/Ishtar max 1 remote slot; coordinator serializes writes")
+    print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
+    print("  Ponder on; ~85% local engine games, max 1 Ka slot; SQLite DB only (no .games files)")
+    print("  Scoreboard + progress dock refresh after each finished game.")
+    if not args.no_train:
+        print(f"  Background NNUE: micro-train each game; gated deploy every {DEPLOY_EVERY_GAMES} trains")
+        print("  Promote if drift>2cp OR move>5% (and Elo ok). Log: training/data/nnue_train.log")
+        print("  Report: python training/plateau_probe.py --report")
+    else:
+        print("  Background NNUE: OFF (--no-train)")
     print("=" * 64)
-    print(format_scoreboard(load_manifest()))
 
     start_coordinator()
-    TOURNAMENT_DIR.mkdir(parents=True, exist_ok=True)
 
     try:
-        rc = run_pool(args.parallel)
+        rc = run_pool(args.parallel, enable_train=not args.no_train)
         if rc != 0:
             print(f"pool exited {rc}", flush=True)
     except KeyboardInterrupt:

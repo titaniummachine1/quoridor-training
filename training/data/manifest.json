@@ -9,52 +9,154 @@
   },
   "sources": {},
   "current_engine": "titanium-v15",
-  "baseline_engine": "ace-v13-ti-pure",
-  "updated_at": "2026-06-16T10:36:24.698403+00:00",
+  "baseline_engine": "ace-v13",
+  "updated_at": "2026-06-16T17:08:00.861430+00:00",
   "matchups": {
     "titanium-v15|ace-v13-ti-pure|5s|5s": {
       "a_engine": "titanium-v15",
       "b_engine": "ace-v13-ti-pure",
       "tc_a": "5s",
       "tc_b": "5s",
-      "a_wins": 2,
-      "b_wins": 1,
+      "a_wins": 41,
+      "b_wins": 16,
+      "games_played": 57,
+      "elo_a_vs_b": 160.2,
+      "last_source": "pool-titanium-v15-vs-ace-v13-ti-pure-5s"
+    },
+    "titanium-v15|ka|5s|short": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ka",
+      "tc_a": "5s",
+      "tc_b": "short",
+      "a_wins": 0,
+      "b_wins": 3,
       "games_played": 3,
-      "elo_a_vs_b": 88.7,
-      "games_file": "C:\\gitProjects\\Quoridor best AI\\training\\data\\tournament\\titanium-v15-vs-ace-v13-ti-pure-5s-d177d054.games",
-      "games_in_file": 1,
-      "last_source": "random-titanium-v15-vs-ace-v13-ti-pure-5s-d177d054"
+      "elo_a_vs_b": -338.0,
+      "last_source": "pool-v15-vs-ka-short"
+    },
+    "titanium-v15|ka|5s|intuition": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ka",
+      "tc_a": "5s",
+      "tc_b": "intuition",
+      "a_wins": 3,
+      "b_wins": 2,
+      "games_played": 5,
+      "elo_a_vs_b": 58.5,
+      "last_source": "pool-v15-vs-ka-intuition"
+    },
+    "titanium-v15|ka|5s|medium": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ka",
+      "tc_a": "5s",
+      "tc_b": "medium",
+      "a_wins": 0,
+      "b_wins": 3,
+      "games_played": 3,
+      "elo_a_vs_b": -338.0,
+      "last_source": "pool-v15-vs-ka-medium"
+    },
+    "ace-v13-ti-pure|ace-v13|5s|5s": {
+      "a_engine": "ace-v13-ti-pure",
+      "b_engine": "ace-v13",
+      "tc_a": "5s",
+      "tc_b": "5s",
+      "a_wins": 18,
+      "b_wins": 38,
+      "games_played": 56,
+      "elo_a_vs_b": -127.3,
+      "last_source": "pool-ace-v13-ti-pure-vs-ace-v13-5s"
+    },
+    "titanium-v15|ace-v13|5s|5s": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ace-v13",
+      "tc_a": "5s",
+      "tc_b": "5s",
+      "a_wins": 17,
+      "b_wins": 39,
+      "games_played": 56,
+      "elo_a_vs_b": -141.4,
+      "last_source": "pool-titanium-v15-vs-ace-v13-5s"
+    },
+    "titanium-v15|ka|5s|long": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ka",
+      "tc_a": "5s",
+      "tc_b": "long",
+      "a_wins": 0,
+      "b_wins": 3,
+      "games_played": 3,
+      "elo_a_vs_b": -338.0,
+      "last_source": "pool-v15-vs-ka-long"
     }
   },
-  "anchor_entity": "ace-v13-ti-pure@5s",
-  "anchor_rating": 1400.0,
+  "anchor_entity": "ace-v13@5s",
+  "anchor_rating": 1200.0,
   "strength_tracker": {
     "a_engine": "titanium-v15",
-    "b_engine": "ace-v13-ti-pure",
+    "b_engine": "ace-v13",
     "tc_a": "5s",
     "tc_b": "5s",
-    "a_wins": 2,
-    "b_wins": 1,
-    "games_played": 3,
-    "elo_a_vs_b": 88.7,
-    "games_file": "C:\\gitProjects\\Quoridor best AI\\training\\data\\tournament\\titanium-v15-vs-ace-v13-ti-pure-5s-d177d054.games",
-    "games_in_file": 1,
-    "last_source": "random-titanium-v15-vs-ace-v13-ti-pure-5s-d177d054",
-    "elo_vs_baseline": 88.7
+    "a_wins": 17,
+    "b_wins": 39,
+    "games_played": 56,
+    "elo_a_vs_b": -141.4,
+    "last_source": "pool-titanium-v15-vs-ace-v13-5s",
+    "elo_vs_baseline": -141.4
   },
   "global_ratings": {
     "ace-v13-ti-pure@5s": {
-      "rating": 1400,
-      "wins": 1,
-      "losses": 2,
+      "rating": 1014,
+      "wins": 34,
+      "losses": 79,
+      "games": 113,
+      "anchor": false,
+      "provisional": false
+    },
+    "ka@short": {
+      "rating": 1454,
+      "wins": 3,
+      "losses": 0,
       "games": 3,
-      "anchor": true,
+      "anchor": false,
       "provisional": true
     },
-    "titanium-v15@5s": {
-      "rating": 1489,
+    "ace-v13@5s": {
+      "rating": 1200,
+      "wins": 77,
+      "losses": 35,
+      "games": 112,
+      "anchor": true,
+      "provisional": false
+    },
+    "ka@long": {
+      "rating": 1454,
+      "wins": 3,
+      "losses": 0,
+      "games": 3,
+      "anchor": false,
+      "provisional": true
+    },
+    "ka@intuition": {
+      "rating": 1058,
       "wins": 2,
-      "losses": 1,
+      "losses": 3,
+      "games": 5,
+      "anchor": false,
+      "provisional": false
+    },
+    "titanium-v15@5s": {
+      "rating": 1117,
+      "wins": 61,
+      "losses": 66,
+      "games": 127,
+      "anchor": false,
+      "provisional": false
+    },
+    "ka@medium": {
+      "rating": 1454,
+      "wins": 3,
+      "losses": 0,
       "games": 3,
       "anchor": false,
       "provisional": true
@@ -62,6 +164,6 @@
   },
   "tournament": {
     "mode": "random-pool",
-    "games": 4
+    "games": 460
   }
 }

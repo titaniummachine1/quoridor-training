@@ -2,7 +2,7 @@
 
 Per matchup: only a_wins / b_wins (+ optional time-control labels).
 Elo diff recomputed from W/L ratio. Global ladder propagates diffs from
-anchor ace-v13-ti-pure@5s = 1400 (Quoridor Pro–style scale; see ANCHOR_RATING).
+anchor ace-v13@5s = 1200 (JS v13 in site; ti-pure Rust port is stronger, not anchor).
 """
 
 from __future__ import annotations
@@ -22,10 +22,12 @@ STATUS_PATH = DATA / "STATUS.txt"
 LOCK_PATH = DATA / "manifest.lock"
 
 CURRENT_ENGINE = "titanium-v15"
-BASELINE_ENGINE = "ace-v13-ti-pure"
+# Ladder anchor only — site JS v13 reference @ 1200. NOT ti-pure Rust, NOT v15.
+ANCHOR_ENGINE = "ace-v13"
+BASELINE_ENGINE = ANCHOR_ENGINE
 # Bare "titanium" = legacy GameSearchSession (MCTS), NOT v15 or ace-v13 — exclude from ladder.
 DEPRECATED_LADDER_ENGINES = frozenset({"titanium", "titanium-cert", "titanium-plain"})
-ANCHOR_ENTITY = f"{BASELINE_ENGINE}@5s"
+ANCHOR_ENTITY = f"{ANCHOR_ENGINE}@5s"
 REMOTE_ENGINES = frozenset({"ka", "ishtar"})
 # Site UI labels for Ka/Ishtar time presets (strength fixed at Alpha on wire).
 REMOTE_TIME_LABELS = {
@@ -35,9 +37,8 @@ REMOTE_TIME_LABELS = {
     "medium": "Medium",
     "long": "Long",
 }
-# quoridor.pro starts new players at 1400; top humans ~1450–1490 (2024–2026 leaderboard).
-# ti-pure = JS v13 + O1 movegen only → pinned as “default online player”, not chess-club 1600.
-ANCHOR_RATING = 1400.0
+# JS ace-v13 @ 5s pinned as reference (~weaker than ti-pure Rust port).
+ANCHOR_RATING = 1200.0
 MIN_GAMES_GLOBAL = 2  # include Ka/remote on ladder after a few games
 MIN_GAMES_LADDER_STABLE = 4  # shown as note in STATUS when below this
 
@@ -76,6 +77,8 @@ def display_entity(ent: str) -> str:
     if base in REMOTE_ENGINES:
         ui = REMOTE_TIME_LABELS.get(tc, tc)
         return f"{base}@{tc} ({ui} @ Alpha)"
+    if base == ANCHOR_ENGINE:
+        return f"{ent} (JS v13 ref)"
     return ent
 
 
@@ -332,7 +335,7 @@ def load_manifest() -> dict:
         manifest = {"paths": PATHS, "sources": {}, "matchups": {}, "global_ratings": {}}
     manifest["paths"] = PATHS
     manifest["current_engine"] = CURRENT_ENGINE
-    manifest["baseline_engine"] = BASELINE_ENGINE
+    manifest["baseline_engine"] = ANCHOR_ENGINE
     manifest["anchor_entity"] = ANCHOR_ENTITY
     manifest["anchor_rating"] = ANCHOR_RATING
     manifest = _migrate_legacy_strength(manifest)
@@ -342,6 +345,10 @@ def load_manifest() -> dict:
 
 
 def _write_manifest(manifest: dict) -> None:
+    manifest["current_engine"] = CURRENT_ENGINE
+    manifest["baseline_engine"] = ANCHOR_ENGINE
+    manifest["anchor_entity"] = ANCHOR_ENTITY
+    manifest["anchor_rating"] = ANCHOR_RATING
     manifest["global_ratings"] = compute_global_ratings(manifest.get("matchups", {}))
     DATA.mkdir(parents=True, exist_ok=True)
     manifest["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -443,15 +450,15 @@ def _format_tc(tc_a: str, tc_b: str) -> str:
 
 def format_scoreboard(manifest: dict) -> str:
     """Terminal-friendly ladder + matchup W/L (same data as STATUS.txt core)."""
-    global_ratings = manifest.get("global_ratings", {})
     matchups = manifest.get("matchups", {})
+    global_ratings = compute_global_ratings(matchups)
     t = manifest.get("tournament", {})
     db_records = _count_lines(Path(PATHS["training_db"]))
 
     lines = [
         "",
         "=" * 72,
-        f" SCOREBOARD   anchor {ANCHOR_ENTITY} = {int(ANCHOR_RATING)} Elo   |   {db_records} games in DB",
+        f" SCOREBOARD   anchor {display_entity(ANCHOR_ENTITY)} = {int(ANCHOR_RATING)} Elo   |   {db_records} games in DB",
         "=" * 72,
     ]
     if t:
@@ -504,6 +511,18 @@ def format_scoreboard(manifest: dict) -> str:
             delta = global_ratings[cur]["rating"] - int(ANCHOR_RATING)
             sign = "+" if delta >= 0 else ""
             lines.append(f"  >> {cur} = {global_ratings[cur]['rating']} ({sign}{delta} vs anchor)")
+        wl = aggregate_entity_wl(matchups)
+        shown = {ent for ent, _ in ranked}
+        pending = [
+            (ent, wl[ent])
+            for ent in wl
+            if ent not in shown and wl[ent].get("games", 0) > 0 and not is_deprecated_entity(ent)
+        ]
+        for ent, s in sorted(pending, key=lambda x: -x[1].get("games", 0)):
+            w, l, g = s.get("wins", 0), s.get("losses", 0), s.get("games", 0)
+            lines.append(
+                f"  .. {display_entity(ent):<34}   -- Elo   {w}-{l}  ({g}g) [pending graph]"
+            )
         lines.append("-" * 72)
 
     if matchups:
@@ -563,7 +582,7 @@ def _write_status_txt(manifest: dict) -> None:
 
     if global_ratings:
         lines.append(
-            f"GLOBAL RATING LADDER (~Quoridor Pro scale, anchor {int(ANCHOR_RATING)}; "
+            f"GLOBAL RATING LADDER (anchor {int(ANCHOR_RATING)} = JS {BASELINE_ENGINE}; "
             "direct H2H is more precise per pairing):"
         )
         ranked = sorted(

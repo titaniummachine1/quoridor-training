@@ -1,0 +1,22 @@
+---
+description: Ka/Ishtar remote WebSocket is stateless search — not a game opponent. Always makemove every ply.
+globs: site/ishtar_match.js,site/remote_game_worker.js,site/extracted/engine_client.js,site/overnight_batch.js,site/probe_commit.js
+alwaysApply: false
+---
+
+# Ka / Ishtar remote engine semantics
+
+The quoridor-ai.com Ka and Ishtar endpoints are **not playing a game**. They are a **position search API**:
+
+- Server state = last `makemove` / `setposition` on **this** WebSocket only.
+- `go` returns `bestmove` for that position. **`bestmove` does NOT advance server state.**
+- **Must `makemove` after every ply** — local moves AND after echoing Ka's own `bestmove`.
+- **Reconnect = replay full move history** before next `go` (`_appliedActions` in `RemoteEngine`, `site/ishtar_match.js`).
+- Server has **zero** knowledge of local titanium sessions, DB, or UI board.
+
+When changing remote match code:
+
+1. Never skip `notifyMove` after Ka's `bestmove`.
+2. On retry/reconnect, replay `_appliedActions` — do not assume server position.
+3. Do not wait for Ka to "sync" — you push state, then ask for a move.
+4. Full protocol: `site/extracted/ENGINE_PROTOCOL.md` § "Not a game server".

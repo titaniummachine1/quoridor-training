@@ -2,7 +2,7 @@
 
 Appends 3 zero-valued f64 scalars immediately after the original 13 ws[] values,
 shifting the remaining blobs (b1, w2, w1c, po, px) by 24 bytes.  The new weights
-(ws[13]=fragile-lead, ws[14]=corridor-width-me, ws[15]=corridor-width-opp) are
+(ws[13]=fragile-lead, ws[14]=legal_wall_count/128, ws[15]=corridor-width-opp) are
 zero-initialised so the net is behaviour-identical before retraining.
 
 Run once from the repo root:

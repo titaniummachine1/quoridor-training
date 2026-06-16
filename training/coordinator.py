@@ -6,7 +6,7 @@ Parallel match workers POST upserts here instead of fighting over manifest.json,
 
   POST /api/matchup   upsert cumulative W/L for a pairing
   GET  /api/matchup   lookup prior a_wins / b_wins
-  POST /api/game      insert one game into all_games.db (+ optional .games backup)
+  POST /api/game      insert one game into all_games.db (SQLite only)
   POST /api/claim-pairing  atomically pick next game for a free slot
   POST /api/release-remote free remote slot after crash/skip
   GET  /api/scoreboard
@@ -23,12 +23,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from datagen import DB_PATH, insert_single_game
+from datagen import DB_PATH, insert_single_game, validate_game
 from manifest import format_scoreboard, load_manifest, lookup_prior_wins, save_manifest, update_matchup
 from swiss_tournament import MAX_REMOTE_PARALLEL, pick_one_pairing, pairing_game_entry
 
 ROOT = Path(__file__).resolve().parent.parent
-TOURNAMENT_DIR = ROOT / "training" / "data" / "tournament"
 
 _lock = threading.Lock()
 _active_remotes: set[str] = set()
@@ -43,7 +42,7 @@ def _claim_pairing() -> dict | None:
     if pairing is None:
         return None
     game_id = uuid.uuid4().hex[:8]
-    entry = pairing_game_entry(pairing, game_id, TOURNAMENT_DIR)
+    entry = pairing_game_entry(pairing, game_id, ROOT / "training" / "data")
     if pairing.kind == "remote":
         _active_remotes.add(game_id)
         entry["release_remote"] = True
@@ -97,8 +96,12 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             from swiss_tournament import eligible_pairings
             with _lock:
                 pool = eligible_pairings(load_manifest())
+                local_n = sum(1 for p in pool if p.kind == "local")
+                remote_n = sum(1 for p in pool if p.kind == "remote")
             self._send_json(200, {
                 "pairings": len(pool),
+                "local_pairings": local_n,
+                "remote_pairings": remote_n,
                 "remote_in_flight": len(_active_remotes),
             })
             return
@@ -174,16 +177,18 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "need moves[] and result W|B"})
                 return
             outcome = 1 if result == "W" else -1
+            err = validate_game(moves, outcome)
+            if err:
+                self._send_json(400, {"error": err})
+                return
             tag = body.get("tag") or body.get("source_tag") or ""
-            games_file = body.get("games_file")
 
             with _lock:
-                gid = insert_single_game(moves, outcome, DB_PATH, tag)
-                if games_file:
-                    p = Path(games_file)
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    with open(p, "a", encoding="utf-8") as f:
-                        f.write(f"GAME {' '.join(moves)}\nRESULT {result}\n")
+                try:
+                    gid = insert_single_game(moves, outcome, DB_PATH, tag)
+                except ValueError as e:
+                    self._send_json(400, {"error": str(e)})
+                    return
                 if body.get("release_remote"):
                     _release_remote(body.get("game_id"))
                 _record_game_done()
@@ -198,6 +203,8 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--host", default="127.0.0.1")
     args = ap.parse_args()
+
+    save_manifest(load_manifest())
 
     server = ThreadingHTTPServer((args.host, args.port), CoordinatorHandler)
     print(f"coordinator listening on http://{args.host}:{args.port}", flush=True)

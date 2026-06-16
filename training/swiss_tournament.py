@@ -5,7 +5,7 @@ Pairings are chosen at random, weighted toward underplayed matchups so every
 engine eventually meets every other eligible opponent.
 
 Remote opponents unavailable (e.g. Ishtar down) are skipped.
-Global ladder propagates from anchor ace-v13-ti-pure@5s = 1400.
+Global ladder propagates from anchor ace-v13@5s = 1200.
 """
 
 from __future__ import annotations
@@ -56,9 +56,22 @@ class Pairing:
             return f"{safe}-{batch_id}.games"
         return f"{safe}.games"
 
-    def source_tag(self, batch_id: str = "") -> str:
-        base = f"random-{self.label}"
-        return f"{base}-{batch_id}" if batch_id else base
+    def source_tag(self, _game_id: str = "") -> str:
+        return f"pool-{self.label}"
+
+
+def pairing_game_entry(pairing: Pairing, game_id: str, _tournament_dir: Path) -> dict:
+    """JSON payload for one game worker (local or remote). Games go to SQLite only."""
+    return {
+        "kind": pairing.kind,
+        "label": pairing.label,
+        "engine_a": pairing.engine_a,
+        "engine_b": pairing.engine_b,
+        "tc_a": pairing.tc_a,
+        "tc_b": pairing.tc_b,
+        "source_tag": pairing.source_tag(),
+        "game_id": game_id,
+    }
 
 
 def remote_availability() -> dict[str, bool]:
@@ -83,9 +96,9 @@ def all_pairings() -> list[Pairing]:
         ))
 
     local("titanium-v15", "ace-v13-ti-pure")
-    # NOTE: bare "ace-v13" removed — legacy engine (no Titanium movegen), uninformative
-    # matchup that wastes CPU slots. History kept in manifest; just no longer scheduled.
-    # NOTE: bare "titanium" also excluded — legacy MCTS (GameSearchSession), loses 0-98.
+    local("titanium-v15", "ace-v13")
+    local("ace-v13-ti-pure", "ace-v13")
+    # NOTE: bare "titanium" excluded — legacy MCTS (GameSearchSession), not v15.
 
     def remote(opp: str, opp_time: str) -> None:
         p.append(Pairing(
@@ -127,35 +140,28 @@ def _games_played(manifest: dict, pairing: Pairing) -> int:
     return m.get("games_played", m.get("a_wins", 0) + m.get("b_wins", 0))
 
 
-MAX_REMOTE_PARALLEL = 4  # Allow concurrent remote games against Ka/Ishtar (connections are isolated)
+MAX_REMOTE_PARALLEL = 1  # one Ka/Ishtar game at a time; other slots run local engines
+LOCAL_PICK_BIAS = 0.85   # prefer local titanium.exe matchups over remote Ka
 
 
 def pick_one_pairing(manifest: dict | None = None, *, allow_remote: bool = True) -> Pairing | None:
-    """Pick one random matchup; underplayed pairs are more likely."""
+    """Pick one random matchup; underplayed pairs are more likely. Locals strongly preferred."""
     manifest = manifest or load_manifest()
     pool = eligible_pairings(manifest)
-    if not allow_remote:
-        pool = [p for p in pool if p.kind != "remote"]
-    if not pool:
-        return None
-    weights = [1.0 / (_games_played(manifest, p) + 1) for p in pool]
-    return random.choices(pool, weights=weights, k=1)[0]
+    local = [p for p in pool if p.kind == "local"]
+    remote = [p for p in pool if p.kind == "remote"] if allow_remote else []
 
+    def weighted_pick(candidates: list[Pairing]) -> Pairing:
+        weights = [1.0 / (_games_played(manifest, p) + 1) for p in candidates]
+        return random.choices(candidates, weights=weights, k=1)[0]
 
-def pairing_game_entry(pairing: Pairing, game_id: str, tournament_dir: Path) -> dict:
-    """JSON payload for one game worker (local or remote)."""
-    tournament_dir.mkdir(parents=True, exist_ok=True)
-    return {
-        "kind": pairing.kind,
-        "label": pairing.label,
-        "engine_a": pairing.engine_a,
-        "engine_b": pairing.engine_b,
-        "tc_a": pairing.tc_a,
-        "tc_b": pairing.tc_b,
-        "games_file": str(tournament_dir / pairing.games_file_name(game_id)),
-        "source_tag": pairing.source_tag(game_id),
-        "game_id": game_id,
-    }
+    if local and (not remote or random.random() < LOCAL_PICK_BIAS):
+        return weighted_pick(local)
+    if remote:
+        return weighted_pick(remote)
+    if local:
+        return weighted_pick(local)
+    return None
 
 
 def pick_random_batch(manifest: dict | None = None, n: int = PARALLEL_MATCHUPS) -> list[Pairing]:

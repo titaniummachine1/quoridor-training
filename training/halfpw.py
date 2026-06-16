@@ -1,35 +1,60 @@
 """HalfPW (gen13 ACE) net — Python port of the engine forward pass.
 
-This is the trainer's reference forward pass. It must reproduce the Rust engine
-(`acev13/search.rs::evaluate`, walls-present net path) bit-for-bit; verified
-against `titanium eval <moves> --json` by `parity_check.py`. Getting this exact
-BEFORE training is the discipline that lets us fine-tune the existing weights
-(and later add the new input planes) without the net silently mis-evaluating
-in-engine — the classic NNUE train/inference-mismatch trap.
+Must match `acev13/search.rs::evaluate` bit-for-bit (`parity_check.py`).
 
-Blob layout (little-endian f64), from `acev13/net.rs`:
-    ws[16]  b1[32]  w2[32]  w1c[9*128*32]  po[81*32]  px[81*32]
-
-ws[0..12] = original scalar terms (unchanged from gen13).
-ws[13]    = tempo * opp-wall-count / 10  (fragile-lead cross-term).
-ws[14]    = corridor-width-me  (cells sharing the me-pawn's distance-to-goal rank).
-ws[15]    = corridor-width-opp (same for opponent).
-ws[13..15] are zero-initialised so the net is behaviour-identical before retraining.
+Field plane names: see `training/field_planes.py` and `engine/src/acev13/field_planes.rs`.
+Blob: 11 planes × 81×32 (goal_inv, pawn_fwd, corridor_delta, path_cross, choke×2, contested).
 """
 
 import struct
 from dataclasses import dataclass
+
+from field_planes import (
+    CHOKE_P0,
+    CHOKE_P1,
+    CONTESTED,
+    CORRIDOR_DELTA_P0,
+    CORRIDOR_DELTA_P1,
+    encode_contested,
+    FIELD_PLANE_COUNT,
+    GOAL_INV_P0,
+    GOAL_INV_P1,
+    PATH_CROSS_P0,
+    PATH_CROSS_P1,
+    PAWN_FWD_P0,
+    PAWN_FWD_P1,
+    rec_field,
+)
 
 NET_H = 32
 WSKIP_LEN = 16
 W1C_LEN = 9 * 128 * NET_H
 PO_LEN = 81 * NET_H
 PX_LEN = 81 * NET_H
+FIELD_LEN = 81 * NET_H
+NET_WEIGHT_F64S = WSKIP_LEN + NET_H + NET_H + W1C_LEN + PO_LEN + PX_LEN + FIELD_LEN * FIELD_PLANE_COUNT
 
-# Symmetry tables — exact ports of net.rs build_mirc / build_mirs / build_bkt.
-NET_MIRC = [(8 - i // 9) * 9 + i % 9 for i in range(81)]   # mirror pawn row
-NET_MIRS = [(7 - i // 8) * 8 + i % 8 for i in range(64)]   # mirror wall slot
-NET_BKT = [(i // 9 // 3) * 3 + (i % 9) // 3 for i in range(81)]  # 3x3 bucket
+NET_MIRC = [(8 - i // 9) * 9 + i % 9 for i in range(81)]
+NET_MIRS = [(7 - i // 8) * 8 + i % 8 for i in range(64)]
+NET_BKT = [(i // 9 // 3) * 3 + (i % 9) // 3 for i in range(81)]
+LEGAL_WALL_SLOTS = 128
+
+
+def legal_wall_norm(rec: dict) -> float:
+    """ws[14] input — engine JSON only; no corridor_width fallback."""
+    if "legal_wall_count" not in rec:
+        raise KeyError(
+            "legal_wall_count missing in record — rebuild native titanium and re-run eval-batch"
+        )
+    return rec["legal_wall_count"] / LEGAL_WALL_SLOTS
+
+
+def opponent_corridor_width(rec: dict, me: int, _d_me_i: int, d_opp_i: int) -> int:
+    """ws[15] input — opponent cells on their shortest-path rank."""
+    d0f = rec_field(rec, GOAL_INV_P0)
+    d1f = rec_field(rec, GOAL_INV_P1)
+    field = d1f if me == 0 else d0f
+    return sum(1 for d in field if d == d_opp_i)
 
 
 @dataclass
@@ -40,33 +65,113 @@ class Net:
     w1c: list
     po: list
     px: list
+    goal_inv_p0: list
+    goal_inv_p1: list
+    pawn_fwd_p0: list
+    pawn_fwd_p1: list
+    corridor_delta_p0: list
+    corridor_delta_p1: list
+    path_cross_p0: list
+    path_cross_p1: list
+    choke_p0: list
+    choke_p1: list
+    contested: list
 
     @staticmethod
     def load(path):
         with open(path, "rb") as f:
             raw = f.read()
-        total = WSKIP_LEN + NET_H + NET_H + W1C_LEN + PO_LEN + PX_LEN
-        assert len(raw) == total * 8, f"size {len(raw)} != {total*8}"
-        vals = list(struct.unpack(f"<{total}d", raw))
+        assert len(raw) == NET_WEIGHT_F64S * 8, (
+            f"size {len(raw)} != {NET_WEIGHT_F64S * 8} — run training/extend_field_planes.py"
+        )
+        vals = list(struct.unpack(f"<{NET_WEIGHT_F64S}d", raw))
         o = 0
+
         def take(n):
             nonlocal o
             s = vals[o:o + n]
             o += n
             return s
-        return Net(take(WSKIP_LEN), take(NET_H), take(NET_H),
-                   take(W1C_LEN), take(PO_LEN), take(PX_LEN))
+
+        return Net(
+            take(WSKIP_LEN), take(NET_H), take(NET_H),
+            take(W1C_LEN), take(PO_LEN), take(PX_LEN),
+            take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
+            take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
+            take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
+        )
+
+
+def _cell_feats(goal_f, player_f, delta_f, cross_f, choke_f) -> tuple:
+    gf, pf, df, cf, chf = [], [], [], [], []
+    for i in range(81):
+        dg = goal_f[i] if i < len(goal_f) else 255
+        if dg == 255:
+            gf.append(0.0)
+            pf.append(0.0)
+            df.append(0.0)
+            cf.append(0.0)
+            chf.append(0.0)
+            continue
+        gf.append(dg / 16.0)
+        ps = player_f[i] if i < len(player_f) else 255
+        pf.append(0.0 if ps == 255 else ps / 16.0)
+        dt = delta_f[i] if i < len(delta_f) else 255
+        df.append(0.0 if dt == 255 else dt / 16.0)
+        cv = cross_f[i] if i < len(cross_f) else 0
+        cf.append(0.0 if not cv else cv / 16.0)
+        hv = choke_f[i] if i < len(choke_f) else 0
+        chf.append(hv / 16.0 if hv else 0.0)
+    return gf, pf, df, cf, chf
+
+
+def _contested_vec(delta0_raw, delta1_raw, contested_raw) -> list[float]:
+    out = []
+    for i in range(81):
+        if contested_raw and i < len(contested_raw) and contested_raw[i]:
+            out.append(contested_raw[i] / 16.0)
+            continue
+        d0 = delta0_raw[i] if i < len(delta0_raw) else 255
+        d1 = delta1_raw[i] if i < len(delta1_raw) else 255
+        out.append(encode_contested(d0, d1))
+    return out
+
+
+def _field_plane_contrib(net: Net, hid: list[float], rec: dict) -> None:
+    g0 = rec_field(rec, GOAL_INV_P0)
+    g1 = rec_field(rec, GOAL_INV_P1)
+    p0 = rec_field(rec, PAWN_FWD_P0)
+    p1 = rec_field(rec, PAWN_FWD_P1)
+    d0 = rec_field(rec, CORRIDOR_DELTA_P0)
+    d1 = rec_field(rec, CORRIDOR_DELTA_P1)
+    c0 = rec_field(rec, PATH_CROSS_P0)
+    c1 = rec_field(rec, PATH_CROSS_P1)
+    k0 = rec_field(rec, CHOKE_P0)
+    k1 = rec_field(rec, CHOKE_P1)
+    ct = rec_field(rec, CONTESTED)
+    gf0, pf0, df0, cf0, ch0 = _cell_feats(g0, p0, d0, c0, k0)
+    gf1, pf1, df1, cf1, ch1 = _cell_feats(g1, p1, d1, c1, k1)
+    contested = _contested_vec(d0, d1, ct)
+    for i in range(81):
+        base = i * NET_H
+        for j in range(NET_H):
+            hid[j] += (
+                net.goal_inv_p0[base + j] * gf0[i]
+                + net.pawn_fwd_p0[base + j] * pf0[i]
+                + net.corridor_delta_p0[base + j] * df0[i]
+                + net.path_cross_p0[base + j] * cf0[i]
+                + net.choke_p0[base + j] * ch0[i]
+                + net.goal_inv_p1[base + j] * gf1[i]
+                + net.pawn_fwd_p1[base + j] * pf1[i]
+                + net.corridor_delta_p1[base + j] * df1[i]
+                + net.path_cross_p1[base + j] * cf1[i]
+                + net.choke_p1[base + j] * ch1[i]
+                + net.contested[base + j] * contested[i]
+            )
 
 
 def forward(net, rec):
-    """Reproduce the engine's walls-present net eval for one feature record.
-
-    `rec` is the JSON from `titanium eval ... --json`:
-      turn, pawn0, pawn1, wl0, wl1, d0, d1,
-      d0_field[81], d1_field[81],   <- full BFS distance arrays (new in ws[16] format)
-      hw[64], vw[64].
-    Returns the integer centipawn eval (truncated toward zero, as the Rust `as i32`).
-    """
+    """Reproduce the engine's walls-present net eval for one feature record."""
     me = rec["turn"]
     opp = 1 - me
     wl = [rec["wl0"], rec["wl1"]]
@@ -95,24 +200,12 @@ def forward(net, rec):
     if d_me <= 4.0:
         out += ws[12] * (w_opp if w_opp < 3.0 else 3.0)
 
-    # ws[13]: fragile-lead (tempo * opp walls)
     out += ws[13] * pd * w_opp / 10.0
 
-    # ws[14..15]: corridor-width proxies.
-    # d0_field[cell] = BFS distance from cell to P0's goal row (=d0 inverse BFS).
-    # Count cells sharing the pawn's distance rank = how wide the corridor is at that depth.
     d_me_i = int(d_me)
     d_opp_i = int(d_opp)
-    if me == 0:
-        d0f = rec.get("d0_field", [])
-        d1f = rec.get("d1_field", [])
-    else:
-        d0f = rec.get("d0_field", [])
-        d1f = rec.get("d1_field", [])
-    # width_me: cells where P0's BFS dist == d_me (for me=0) / P1's BFS dist == d_opp (for me=1)
-    width_me  = sum(1 for d in (d0f if me == 0 else d1f) if d == d_me_i)
-    width_opp = sum(1 for d in (d1f if me == 0 else d0f) if d == d_opp_i)
-    out += ws[14] * width_me + ws[15] * width_opp
+    out += ws[14] * legal_wall_norm(rec)
+    out += ws[15] * opponent_corridor_width(rec, me, d_me_i, d_opp_i)
 
     pawn0, pawn1 = rec["pawn0"], rec["pawn1"]
     hw, vw = rec["hw"], rec["vw"]
@@ -151,8 +244,10 @@ def forward(net, rec):
         for j in range(NET_H):
             hid[j] = net.b1[j] + acc[j] + net.po[po0 + j] + net.px[px1 + j]
 
+    _field_plane_contrib(net, hid, rec)
+
     for j in range(NET_H):
         a2 = min(1.0, max(0.0, hid[j]))
         out += net.w2[j] * a2 * 200.0
 
-    return int(out)  # truncate toward zero, matching Rust `out as i32`
+    return int(out)

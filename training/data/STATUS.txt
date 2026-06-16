@@ -1,9 +1,9 @@
 === Quoridor training data ===
-Updated: 2026-06-16T10:36:24.698403+00:00
-Anchor: ace-v13-ti-pure@5s = 1400 Elo
+Updated: 2026-06-16T17:08:00.861430+00:00
+Anchor: ace-v13@5s = 1200 Elo
 
 KEY FILES (training/data/):
-  Training DB:     all_games.db  (229 games)
+  Training DB:     all_games.db  (685 games)
   Elo manifest:    manifest.json
   This summary:    STATUS.txt
 
@@ -11,10 +11,21 @@ SWISS TOURNAMENT (overnight):
   Round ?  last: ? (?)
   Next: ?
 
-GLOBAL RATING LADDER (~Quoridor Pro scale, anchor 1400; direct H2H is more precise per pairing):
-  #1  titanium-v15@5s                  1489 Elo  2-1 (3g, 67% win)  [prov]
-  #2  ace-v13-ti-pure@5s               1400 Elo  1-2 (3g, 33% win)  [anchor]  [prov]
-  >> titanium-v15@5s = 1489 Elo (+89 vs anchor)
+GLOBAL RATING LADDER (anchor 1200 = JS ace-v13; direct H2H is more precise per pairing):
+  #1  ka@short                         1454 Elo  3-0 (3g, 100% win)  [prov]
+  #2  ka@long                          1454 Elo  3-0 (3g, 100% win)  [prov]
+  #3  ka@medium                        1454 Elo  3-0 (3g, 100% win)  [prov]
+  #4  ace-v13@5s                       1200 Elo  77-35 (112g, 69% win)  [anchor]
+  #5  titanium-v15@5s                  1117 Elo  61-66 (127g, 48% win)
+  #6  ka@intuition                     1058 Elo  2-3 (5g, 40% win)
+  #7  ace-v13-ti-pure@5s               1014 Elo  34-79 (113g, 30% win)
+  >> titanium-v15@5s = 1117 Elo (+-83 vs anchor)
 
 MATCHUP DETAILS (direct W/L → Elo diff):
-  titanium-v15 vs ace-v13-ti-pure (5s): 2-1 / 3g  ~+89 diff (±53%) [random-titanium-v15-vs-ace-v13-ti-pure-5s-d177d054]
+  ace-v13-ti-pure vs ace-v13 (5s): 18-38 / 56g  ~-127 diff (±12%) [pool-ace-v13-ti-pure-vs-ace-v13-5s]
+  titanium-v15 vs ace-v13-ti-pure (5s): 41-16 / 57g  ~+160 diff (±12%) [pool-titanium-v15-vs-ace-v13-ti-pure-5s]
+  titanium-v15 vs ace-v13 (5s): 17-39 / 56g  ~-141 diff (±12%) [pool-titanium-v15-vs-ace-v13-5s]
+  titanium-v15 vs ka (A:5s B:intuition): 3-2 / 5g  ~+58 diff (±43%) [pool-v15-vs-ka-intuition]
+  titanium-v15 vs ka (A:5s B:long): 0-3 / 3g  ~-338 diff (±0%) [pool-v15-vs-ka-long]
+  titanium-v15 vs ka (A:5s B:medium): 0-3 / 3g  ~-338 diff (±0%) [pool-v15-vs-ka-medium]
+  titanium-v15 vs ka (A:5s B:short): 0-3 / 3g  ~-338 diff (±0%) [pool-v15-vs-ka-short]

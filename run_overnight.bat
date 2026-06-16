@@ -1,13 +1,9 @@
 @echo off
-:: Random overnight: 4 different matchups in parallel, one progress bar each.
-::
-:: Local @5s:  every pair (v15, ti-pure, ace-v13, titanium)
-:: Remote:      v15@5s vs Ka @ Alpha — all time presets (+ Ishtar when up)
-::
-:: Scoreboard prints after each batch. Also: scoreboard.bat
-::
-:: Preview matchups:  python training\run_swiss_overnight.py --list
+:: OVERNIGHT STABLE LOOP — search/BFS fixed; NNUE prior drifts slowly.
+:: Promote: drift>2cp OR move>5% AND Elo ok. 7 ladder slots + background micro-train.
+:: Log: training\data\nnue_train.log  |  python training\plateau_probe.py --report
+:: No train: run_overnight.bat --no-train
 
 setlocal
 cd /d "%~dp0"
-python training\run_swiss_overnight.py %*
+python training\run_swiss_overnight.py --parallel 7 %*

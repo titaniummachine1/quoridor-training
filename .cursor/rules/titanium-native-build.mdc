@@ -1,0 +1,25 @@
+---
+description: Always build titanium with native CPU features (BMI2/PEXT) — never suboptimal
+globs: engine/**/*
+alwaysApply: true
+---
+
+# Titanium release builds — native only
+
+**Never** build the playing engine without native CPU instructions.
+
+## Required (PowerShell)
+
+```powershell
+$env:RUSTFLAGS = '-C target-cpu=native'
+cargo build --release -p titanium
+```
+
+## Forbidden
+
+- Do **not** set `TITANIUM_ALLOW_SUBOPTIMAL=1` for production, overnight pool, benchmarks, or deploy.
+- Do **not** run `cargo build --release` without `RUSTFLAGS=-C target-cpu=native` when the artifact is `titanium.exe`.
+
+Suboptimal builds use the scalar pawn-LUT fallback (~4× slower movegen). Overnight pool and Elo runs on a suboptimal binary invalidate results.
+
+`training/nnue_guards.py` already sets `RUSTFLAGS` for guarded train/deploy paths — match that for manual builds.

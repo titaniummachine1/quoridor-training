@@ -1,0 +1,37 @@
+---
+description: Per-game NNUE queue, L3 leaf budget, unwired architecture note
+globs: training/train.py,training/nnue_guards.py,training/run_nnue_cycle.py,training/run_swiss_overnight.py
+alwaysApply: false
+---
+
+# NNUE training (HalfPW, lean minimax)
+
+## ws[14] semantic contract (single source of truth)
+
+- `ws[14] = legal_wall_count / 128` only — never corridor_width, never fallback default.
+- Engine `evaluate()`, `halfpw.forward`, and `train.py` must match bit-for-bit (`parity_check.py`).
+- `datagen` requires `legal_wall_count` from eval-batch JSON (no silent default).
+
+## Architecture not fully wired
+
+- **Engine** `eval --json` has richer inputs (d0_field, corridor width).
+- **Trainer** still uses **v13-style HalfPW** — fine-tune from existing weights.
+- New input neurons must be **zero-init**; use `assert_leaf_net_budget()` before expanding.
+
+## One program
+
+`run_swiss_overnight.py` = game pool + **per-game train queue** (`--no-train` to disable).
+
+Flow: `POOL_DONE db_id=N` → queue → `run_on_game(N)` subprocess (BELOW_NORMAL priority).
+
+## Size budgets
+
+- **Leaf net** (`net_weights.bin`): ~300 KB, target fits **L3 cache** (512 KB budget in guards).
+- **Checkpoints**: 500 MB soft / 1 GB hard — not the inference net.
+- Do not grow leaf eval beyond L3 without explicit user approval.
+
+## Guards
+
+- Elo drop ≥12 → snapshot under `checkpoints/snapshots/`
+- Pre-train skip if v15 vs ti-pure >58%
+- Engine binary keeps old weights until manual deploy of `net_weights_best.bin`
