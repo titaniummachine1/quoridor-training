@@ -284,9 +284,9 @@ def main():
 
     if args.list:
         print(f"\nELIGIBLE MATCHUPS  ({args.parallel} independent slots, 1 game at a time each)")
-        print(f"{'#':<4} {'PAIRING':<36} {'GAMES':>6}  KIND")
-        for i, (p, n, _tag) in enumerate(list_pairings(), 1):
-            print(f"{i:<4} {p.label:<36} {n:>6}  {p.kind}")
+        print(f"{'#':<4} {'PAIRING':<40} {'GAMES':>6}  {'ROLE':<6} KIND")
+        for i, (p, n, role) in enumerate(list_pairings(), 1):
+            print(f"{i:<4} {p.label:<40} {n:>6}  {role:<6} {p.kind}")
         print(f"\nAnchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
         return
 
@@ -301,7 +301,7 @@ def main():
     print("RANDOM OVERNIGHT TOURNAMENT  (continuous pool)")
     print(f"  {args.parallel} independent slots — next pairing when each game finishes")
     print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
-    print("  Ponder on; ~85% local engine games, max 1 Ka slot; SQLite DB only (no .games files)")
+    print("  Ponder on; train=v15 vs Ka + ti-pure; bench=v15 vs JS ace-v13 anchor; max 1 Ka slot")
     print("  Scoreboard + progress dock refresh after each finished game.")
     if not args.no_train:
         print(f"  Background NNUE: micro-train each game; gated deploy every {DEPLOY_EVERY_GAMES} trains")

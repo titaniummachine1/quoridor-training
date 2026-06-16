@@ -1,8 +1,12 @@
 """Random tournament pairing for overnight Elo estimation.
 
 Each batch runs PARALLEL_MATCHUPS different matchups concurrently (1 game each).
-Pairings are chosen at random, weighted toward underplayed matchups so every
-engine eventually meets every other eligible opponent.
+Pairings are chosen at random, weighted toward underplayed matchups.
+
+Pool split:
+  TRAIN  — v15 vs Ka + v15 vs ace-v13-ti-pure (Rust); micro-train on these
+  BENCH  — v15 vs ace-v13 (JS anchor @ 1200); Elo ladder only, no training
+  Ace engines never play each other.
 
 Remote opponents unavailable (e.g. Ishtar down) are skipped.
 Global ladder propagates from anchor ace-v13@5s = 1200.
@@ -20,6 +24,7 @@ from pathlib import Path
 from manifest import (
     ANCHOR_ENTITY,
     ANCHOR_RATING,
+    CURRENT_ENGINE,
     entity_label,
     load_manifest,
     matchup_key,
@@ -42,6 +47,7 @@ class Pairing:
     tc_a: str
     tc_b: str
     label: str
+    trainable: bool = False
     priority: int = 0
     target_games: int = 0
     our_time: float = 5.0
@@ -85,41 +91,47 @@ def remote_availability() -> dict[str, bool]:
 
 
 def all_pairings() -> list[Pairing]:
-    """Every eligible engine-vs-engine matchup (local @5s + v15 vs remote presets)."""
+    """v15 vs Ka + v15 vs ti-pure (train); v15 vs JS ace-v13 (anchor bench only)."""
     p: list[Pairing] = []
 
-    def local(a: str, b: str) -> None:
-        p.append(Pairing(
-            kind="local", engine_a=a, engine_b=b,
-            tc_a="5s", tc_b="5s",
-            label=f"{a}-vs-{b}-5s",
-        ))
+    # JS v13 @ 1200 — ladder anchor only, never micro-trained
+    p.append(Pairing(
+        kind="local",
+        engine_a=CURRENT_ENGINE,
+        engine_b="ace-v13",
+        tc_a="5s",
+        tc_b="5s",
+        label=f"{CURRENT_ENGINE}-vs-ace-v13-5s",
+        trainable=False,
+    ))
 
-    local("titanium-v15", "ace-v13-ti-pure")
-    local("titanium-v15", "ace-v13")
-    local("ace-v13-ti-pure", "ace-v13")
-    # NOTE: bare "titanium" excluded — legacy MCTS (GameSearchSession), not v15.
+    # Rust ti-pure — train + deploy gate adversary
+    p.append(Pairing(
+        kind="local",
+        engine_a=CURRENT_ENGINE,
+        engine_b="ace-v13-ti-pure",
+        tc_a="5s",
+        tc_b="5s",
+        label=f"{CURRENT_ENGINE}-vs-ace-v13-ti-pure-5s",
+        trainable=True,
+    ))
 
-    def remote(opp: str, opp_time: str) -> None:
+    def train_remote(opp: str, opp_time: str) -> None:
         p.append(Pairing(
             kind="remote",
-            engine_a="titanium-v15",
+            engine_a=CURRENT_ENGINE,
             engine_b=opp,
             tc_a="5s",
             tc_b=opp_time,
             label=f"v15-vs-{opp}-{opp_time}",
-            our_time=0, ponder_time=0,
+            trainable=True,
+            our_time=0,
+            ponder_time=0,
         ))
 
-    remote("ka", "intuition")
-    remote("ka", "short")
-    remote("ka", "medium")
-    remote("ka", "long")
-
-    remote("ishtar", "intuition")
-    remote("ishtar", "short")
-    remote("ishtar", "medium")
-    remote("ishtar", "long")
+    train_remote("ka", "short")
+    train_remote("ka", "medium")
+    train_remote("ka", "long")
 
     return p
 
@@ -140,27 +152,42 @@ def _games_played(manifest: dict, pairing: Pairing) -> int:
     return m.get("games_played", m.get("a_wins", 0) + m.get("b_wins", 0))
 
 
-MAX_REMOTE_PARALLEL = 1  # one Ka/Ishtar game at a time; other slots run local engines
-LOCAL_PICK_BIAS = 0.85   # prefer local titanium.exe matchups over remote Ka
+MAX_REMOTE_PARALLEL = 1  # one Ka game at a time; other slots run local train/bench
+TRAIN_PICK_BIAS = 0.85   # prefer train pairings (Ka + ti-pure); ~15% JS anchor bench
+
+
+def is_trainable_source_tag(tag: str) -> bool:
+    """True if DB source tag is from a trainable pool pairing."""
+    t = (tag or "").lower()
+    if "vs-ace-v13-5s" in t and "ti-pure" not in t:
+        return False  # JS anchor — Elo only
+    if "v15-vs-ka-" in t or "titanium-v15-vs-ka-" in t:
+        return True
+    if "ace-v13-ti-pure" in t:
+        return True
+    return False
 
 
 def pick_one_pairing(manifest: dict | None = None, *, allow_remote: bool = True) -> Pairing | None:
-    """Pick one random matchup; underplayed pairs are more likely. Locals strongly preferred."""
+    """Pick one matchup; prefer trainable (Ka + ti-pure) over JS anchor bench."""
     manifest = manifest or load_manifest()
     pool = eligible_pairings(manifest)
-    local = [p for p in pool if p.kind == "local"]
-    remote = [p for p in pool if p.kind == "remote"] if allow_remote else []
+    train = [p for p in pool if p.trainable]
+    bench = [p for p in pool if not p.trainable]
+    if not allow_remote:
+        train = []
 
     def weighted_pick(candidates: list[Pairing]) -> Pairing:
         weights = [1.0 / (_games_played(manifest, p) + 1) for p in candidates]
         return random.choices(candidates, weights=weights, k=1)[0]
 
-    if local and (not remote or random.random() < LOCAL_PICK_BIAS):
-        return weighted_pick(local)
-    if remote:
-        return weighted_pick(remote)
-    if local:
-        return weighted_pick(local)
+    want_train = bool(train) and (not bench or random.random() < TRAIN_PICK_BIAS)
+    if want_train:
+        return weighted_pick(train)
+    if bench:
+        return weighted_pick(bench)
+    if train:
+        return weighted_pick(train)
     return None
 
 
@@ -235,6 +262,7 @@ def list_pairings(manifest: dict | None = None) -> list[tuple[Pairing, int, str]
     manifest = manifest or load_manifest()
     rows: list[tuple[Pairing, int, str]] = []
     for pairing in eligible_pairings(manifest):
-        rows.append((pairing, _games_played(manifest, pairing), ""))
-    rows.sort(key=lambda x: x[1])
+        role = "train" if pairing.trainable else "bench"
+        rows.append((pairing, _games_played(manifest, pairing), role))
+    rows.sort(key=lambda x: (x[2] != "train", x[1]))
     return rows

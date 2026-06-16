@@ -41,12 +41,18 @@ training/data/*.jsonl
 training/data/*.games
 training/data/engine_stamp.json
 training/data/nnue_train.log
+training/data/supervisor.log
+training/data/coordinator.pid
 training/data/tournament/
 training/checkpoints/
+training/checkpoints_smoke/
 training/data/benchmarks_log.jsonl
 training/data/smoke*.jsonl
+training/data/nnue_elo_history.json
+training/data/nnue_eval_probe.json
 
 # Small training metadata is OK to track if needed:
 # training/data/manifest.json
 # training/data/nnue_guard_state.json
 # training/data/STATUS.txt
+# training/data/remote_timing.json

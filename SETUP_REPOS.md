@@ -10,6 +10,27 @@ Quoridor best AI/
 └── test-client/   → titaniummachine1/titanium-quoridor-test-client
 ```
 
+**Training pipeline (root git):** this workspace root is its own repo → `titaniummachine1/quoridor-training` (Python training scripts, pool, supervision; `engine/` as submodule pointer). That GitHub repo must exist before the first push — it is **not** the same as [titanium-quoridor](https://github.com/titaniummachine1/titanium-quoridor) (Rust engine only).
+
+### Create `quoridor-training` on GitHub (one time)
+
+1. Open [github.com/new](https://github.com/new)
+2. Owner: `titaniummachine1`, name: `quoridor-training`, **Private** recommended
+3. Do **not** add README / .gitignore (local repo already has history)
+4. Push:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "C:\gitProjects\Quoridor best AI\push_training.ps1"
+```
+
+Or manually:
+
+```powershell
+cd "C:\gitProjects\Quoridor best AI"
+git remote set-url origin https://github.com/titaniummachine1/quoridor-training.git
+git push -u origin master
+```
+
 ## One-shot push (recommended)
 
 Close VS Code / any git tools first (avoids stale `index.lock`), then:

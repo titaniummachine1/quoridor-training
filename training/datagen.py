@@ -223,6 +223,22 @@ def load_games_by_ids(path: Path, ids: list[int]) -> list[tuple[list[str], int, 
     return [(row["moves"].split(), row["outcome"], row["name"]) for row in rows]
 
 
+def game_source_tag(game_id: int, path: Path | None = None) -> str:
+    """Source label for one games.id row (empty if missing)."""
+    path = Path(path or DB_PATH)
+    if not path.exists():
+        return ""
+    conn = sqlite3.connect(str(path))
+    try:
+        row = conn.execute(
+            "SELECT s.name FROM games g JOIN sources s ON s.id = g.src_id WHERE g.id = ?",
+            (game_id,),
+        ).fetchone()
+        return str(row[0]) if row else ""
+    finally:
+        conn.close()
+
+
 def max_game_id(path: Path | None = None) -> int:
     path = Path(path or DB_PATH)
     if not path.exists():

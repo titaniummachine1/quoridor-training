@@ -61,6 +61,8 @@ def assert_binary_identity(*, write_if_missing: bool = False) -> dict:
     keys = ("path", "sha256", "size")
     mismatch = [k for k in keys if expected.get(k) != current.get(k)]
     if mismatch:
+        if write_if_missing:
+            return current
         details = ", ".join(f"{k}: expected {expected.get(k)!r}, got {current.get(k)!r}" for k in mismatch)
         raise RuntimeError(f"titanium binary identity mismatch ({details})")
     return current
@@ -98,7 +100,7 @@ def assert_engine_ready(*, write_if_missing: bool = False, parity: bool = True) 
     assert_legal_wall_schema()
     if parity:
         assert_parity_6_of_6()
-    if write_if_missing and load_expected_stamp() is None:
+    if write_if_missing:
         write_expected_stamp(stamp)
     return stamp
 
@@ -110,7 +112,7 @@ def main() -> None:
     args = ap.parse_args()
     stamp = assert_engine_ready(write_if_missing=args.write, parity=not args.no_parity)
     if args.write:
-        write_expected_stamp(stamp)
+        write_expected_stamp(stamp)  # idempotent after assert_engine_ready
     print(json.dumps(stamp, indent=2))
 
 
