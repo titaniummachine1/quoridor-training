@@ -38,6 +38,7 @@ from manifest import (  # noqa: E402
     compute_global_ratings,
 )
 from nnue_guards import DEPLOY_EVERY_GAMES, HALFPW_WEIGHT_BYTES, net_weights_size_ok  # noqa: E402
+from engine_identity import assert_engine_ready  # noqa: E402
 from swiss_tournament import (  # noqa: E402
     PARALLEL_MATCHUPS,
     Pairing,
@@ -273,6 +274,13 @@ def main():
 
     if not args.list and not args.scoreboard and not preflight_weights():
         sys.exit(1)
+    if not args.list and not args.scoreboard:
+        try:
+            stamp = assert_engine_ready(write_if_missing=True, parity=True)
+            print(f"  Engine stamp OK: {stamp['sha256'][:12]}  {BIN}")
+        except Exception as e:
+            print(f"ERROR: engine validation failed: {e}")
+            sys.exit(1)
 
     if args.list:
         print(f"\nELIGIBLE MATCHUPS  ({args.parallel} independent slots, 1 game at a time each)")

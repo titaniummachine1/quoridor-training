@@ -37,4 +37,5 @@ __pycache__/
 
 # Training artifacts
 training/data/*.jsonl
+training/data/engine_stamp.json
 training/checkpoints*/

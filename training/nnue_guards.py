@@ -251,8 +251,14 @@ def pretrain_sanity_ok(manifest: dict | None = None, *, batch: bool = False) -> 
     Games still accumulate in DB regardless.
     """
     from manifest import load_manifest
+    from engine_identity import assert_engine_ready
 
     manifest = manifest or load_manifest()
+    try:
+        stamp = assert_engine_ready(write_if_missing=True, parity=True)
+    except Exception as e:
+        return False, f"engine validation failed: {e}"
+
     cap_ok, cap_msg = enforce_artifact_cap()
     if not cap_ok:
         return False, cap_msg
@@ -267,7 +273,7 @@ def pretrain_sanity_ok(manifest: dict | None = None, *, batch: bool = False) -> 
                     "— skip batch train"
                 )
 
-    return True, cap_msg
+    return True, f"{cap_msg}; engine {stamp['sha256'][:12]}"
 
 
 def micro_train_warning(manifest: dict | None = None) -> str | None:
@@ -524,6 +530,10 @@ def maybe_deploy_after_train(*, force: bool = False) -> tuple[bool, str]:
             return False, rebuild_msg
     else:
         rebuild_msg = "staged by move probe"
+
+    from engine_identity import assert_engine_ready
+
+    assert_engine_ready(write_if_missing=True, parity=True)
 
     state = load_guard_state()
     state["games_since_deploy"] = 0

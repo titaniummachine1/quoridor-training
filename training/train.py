@@ -6,7 +6,7 @@ get a predicted probability.  Trains ALL weights (ws, b1, w2, w1c, po, px)
 starting from the current net_weights.bin.
 
 Checkpoints are saved every --checkpoint-steps steps and on every best-val-loss.
-Training is always resumable from the latest checkpoint.
+Resume is allowed only from checkpoints stamped with the current feature schema.
 
 Usage:
     python training/train.py --data training/data/games.jsonl
@@ -58,6 +58,7 @@ from field_planes import (
     PAWN_FWD_P1,
     rec_field,
 )
+from engine_identity import assert_engine_ready
 
 # ── constants matching halfpw.py / net.rs ────────────────────────────────────
 
@@ -79,6 +80,7 @@ NET_BKT  = [(i // 9 // 3) * 3 + (i % 9) // 3 for i in range(81)]
 
 ROOT    = Path(__file__).resolve().parent.parent
 WEIGHTS = ROOT / "engine" / "src" / "acev13" / "net_weights.bin"
+TRAINING_SCHEMA = "halfpw-field11-ws14-legal-wall-v1"
 
 # ── model ─────────────────────────────────────────────────────────────────────
 
@@ -323,6 +325,7 @@ def wdl_loss(eval_cp, target, scale):
 
 def save_checkpoint(path, model, optimizer, step, epoch, best_val):
     torch.save({
+        "schema": TRAINING_SCHEMA,
         "step": step, "epoch": epoch, "best_val": best_val,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -331,6 +334,12 @@ def save_checkpoint(path, model, optimizer, step, epoch, best_val):
 
 def load_checkpoint(path, model, optimizer, *, weights_path=WEIGHTS):
     ckpt = torch.load(path, weights_only=False)
+    schema = ckpt.get("schema")
+    if schema != TRAINING_SCHEMA:
+        raise RuntimeError(
+            f"checkpoint schema {schema!r} != {TRAINING_SCHEMA!r}; "
+            "do not resume checkpoints trained before ws[14]=legal_wall_count/128"
+        )
     try:
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -377,6 +386,13 @@ def main():
 
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
     print(f"Device: {device}")
+
+    try:
+        stamp = assert_engine_ready(write_if_missing=True, parity=True)
+        print(f"Engine stamp OK: {stamp['sha256'][:12]}")
+    except Exception as e:
+        print(f"Training blocked by engine validation: {e}")
+        sys.exit(1)
 
     out_dir = ROOT / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)

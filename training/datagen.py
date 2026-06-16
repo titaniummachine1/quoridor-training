@@ -100,6 +100,7 @@ from field_planes import (
     PAWN_FWD_P1,
     rec_field,
 )
+from engine_identity import assert_engine_ready
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -264,6 +265,7 @@ def db_stats(path: Path) -> dict:
 # ── Engine helpers ────────────────────────────────────────────────────────────
 
 def run_match(engine: str, games: int, time_s: float, openings: str) -> list[str]:
+    assert_engine_ready(parity=False)
     cmd = [str(BIN), "match", "--a", engine, "--b", engine,
            "--games", str(games), "--time", str(time_s), "--dump-games"]
     if openings == "book":
@@ -274,6 +276,7 @@ def run_match(engine: str, games: int, time_s: float, openings: str) -> list[str
 
 def eval_batch(all_move_lists: list[list[str]]) -> list[dict]:
     """Run all move sequences through `titanium eval-batch`; returns one JSON dict per position."""
+    assert_engine_ready(parity=False)
     stdin_text = "\n".join(" ".join(m) if m else "" for m in all_move_lists) + "\n"
     with _eval_batch_lock():
         result = subprocess.run(
