@@ -14,10 +14,13 @@ Push once with `setup_repos.ps1` (four sub-repos) and `push_training.ps1` (root 
 
 ## Quick start
 
-**Engine** (`engine/`):
+**Engine** (`engine/`) — native CPU build required for `titanium.exe` (see `.cursor/rules/titanium-native-build.mdc`):
 
-```bash
-cd engine && cargo test --release && cargo build --release
+```powershell
+cd engine
+$env:RUSTFLAGS = "-C target-cpu=native"
+cargo test --release
+cargo build --release -p titanium
 cargo run --release --bin titanium -- perft 3   # 2_062_264 nodes
 ```
 

@@ -1,5 +1,7 @@
 # HalfPW NNUE retrain - pipeline
 
+> **Architecture handoff (read first):** [`ARCHITECTURE_HANDOFF.md`](ARCHITECTURE_HANDOFF.md) — project goal, dual-head design, training phases, do-not-do list.
+
 Fine-tune the existing gen13 ACE HalfPW net. Do not retrain from scratch: tactical
 knowledge is already in the weights; new inputs are zero-init and learned as residuals.
 
@@ -37,21 +39,27 @@ If `eval-batch` is correct, training is correct. There is no hidden dataset drif
 
 ## Scripts
 
-| Script                       | Role                                                                     |
-| ---------------------------- | ------------------------------------------------------------------------ |
-| `halfpw.py`                  | Python port of engine forward pass                                       |
-| `parity_check.py`            | `halfpw.forward` == `titanium eval ... --json` before train              |
-| `engine_identity.py`         | SHA256 stamp for the single validated `titanium.exe`                     |
-| `regression_triage.py`       | Classify strength drops: eval / search / rollout before blaming training |
-| `nnue_guards.py`             | Artifact caps, Elo snapshots, pre-train gates, deploy                    |
-| `datagen.py`                 | Game ingest + `eval-batch` expansion                                     |
-| `run_nnue_cycle.py`          | Guarded micro/batch train from `all_games.db`                            |
-| `run_swiss_overnight.py`     | Game pool + background NNUE (`--no-train` to disable)                    |
-| `collect_search_importance.py` | Build shallow-vs-deep search-pressure labels for scalar experiments |
-| `train_search_importance.py` | Train the sidecar search-pressure head                                |
-| `run_search_pressure_experiment.py` | Cloud/overnight wrapper for pressure-label collection + head training |
-| `probe_legal_wall_signal.py` | Correlation probe for ws[14] ablation                                    |
-| `plateau_probe.py`           | Eval-drift / promotion gate                                              |
+| Script                              | Role                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `validate_train_ready.py`           | Preflight: binary + parity 6/6 + eval-batch `legal_wall_count`           |
+| `halfpw.py`                         | Python port of engine forward pass                                       |
+| `REGRESSION_BISECT.md`              | Strength regression bisect runbook (evidence-based)                      |
+| `AUDIT_REPORT.md`                   | Verification audits (docs, native build, Phase 3 gaps)                   |
+| `WEAK_AI_TASKS.md`                  | Safe delegated task queue for weak agents                                |
+| `parity_check.py`                   | `halfpw.forward` == `titanium eval ... --json` before train              |
+| `engine_identity.py`                | SHA256 stamp for the single validated `titanium.exe`                     |
+| `regression_triage.py`              | Classify strength drops: eval / search / rollout before blaming training |
+| `nnue_guards.py`                    | Artifact caps, Elo snapshots, pre-train gates, deploy                    |
+| `datagen.py`                        | Game ingest + `eval-batch` expansion                                     |
+| `run_nnue_cycle.py`                 | Guarded micro/batch train from `all_games.db`                            |
+| `run_swiss_overnight.py`            | Game pool + background NNUE (`--no-train` to disable)                    |
+| `collect_search_importance.py`      | Build shallow-vs-deep search-pressure labels for scalar experiments      |
+| `zero_teacher/`                     | External MCTS teacher — see `zero_teacher/HANDOFF.md`                    |
+| `zero_teacher/collect_budget.py`    | MCTS attention labels from quoridor-zero.ink (50–400 visits)             |
+| `train_search_importance.py`        | Train the sidecar search-pressure head                                   |
+| `run_search_pressure_experiment.py` | Cloud/overnight wrapper for pressure-label collection + head training    |
+| `probe_legal_wall_signal.py`        | Correlation probe for ws[14] ablation                                    |
+| `plateau_probe.py`                  | Eval-drift / promotion gate                                              |
 
 ## Pre-Flight
 
@@ -62,26 +70,37 @@ cd engine
 $env:RUSTFLAGS="-C target-cpu=native"
 cargo build --release
 cd ..
+python training/validate_train_ready.py
 python training/engine_identity.py --write
 python training/parity_check.py
 python training/regression_triage.py
 ```
 
+`validate_train_ready.py` is a fast gate before training or overnight retrain: confirms `titanium.exe` exists, parity is 6/6, and eval-batch emits `legal_wall_count`. It does **not** rebuild the engine and does **not** train or mutate weights — run a native rebuild first when the binary changed.
+
 Restart the overnight pool after rebuild so match slots and eval-batch share the same binary.
+
+## Checkpoint resume
+
+`run_nnue_cycle.py` always passes `--resume` to `train.py` for micro-trains. That is fine once you have at least one checkpoint stamped `halfpw-field11-ws14-legal-wall-v1` from the legal-wall era.
+
+**Do not** expect useful resume from pre-ws[14 checkpoints whose optimizer state was trained when `ws[14]` meant `corridor_width_me`. `train.py` checks `TRAINING_SCHEMA` on load; on mismatch it prints a warning and **re-inits weights from deployed `net_weights.bin`** (optimizer state discarded). No manual `--ckpt` override exists today.
+
+Fresh pool start after a schema or binary change: let the first micro-train create a new ws[14]-era checkpoint, or delete stale `ckpt_*.pt` if you want a clean optimizer state.
 
 ## Overnight + Training Guards
 
-| Guard              | Behavior                                                       |
-| ------------------ | -------------------------------------------------------------- |
-| New games          | train after >=32 games since last epoch                        |
-| Interval           | min 10 min between epochs                                      |
-| Artifact soft cap  | 500 MB checkpoints -> prune old `ckpt_step*`                   |
-| Artifact hard cap  | 1 GB -> refuse train                                           |
-| Pre-train win rate | skip batch if v15 vs ti-pure >70%; warn micro at >58%          |
-| Elo drop           | snapshot to `checkpoints/snapshots/` if ladder -12+ from peak  |
-| Resume schema      | refuse checkpoints without `halfpw-field11-ws14-legal-wall-v1` |
-| Engine stamp       | block eval/self-play/train if `titanium.exe` hash changed      |
-| Parity/schema      | training blocked unless parity passes and `legal_wall_count` exists |
+| Guard              | Behavior                                                                                                   |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| New games          | train after >=32 games since last epoch                                                                    |
+| Interval           | min 10 min between epochs                                                                                  |
+| Artifact soft cap  | 500 MB checkpoints -> prune old `ckpt_step*`                                                               |
+| Artifact hard cap  | 1 GB -> refuse train                                                                                       |
+| Pre-train win rate | skip batch if v15 vs ti-pure >70%; warn micro at >58%                                                      |
+| Elo drop           | snapshot to `checkpoints/snapshots/` if ladder -12+ from peak                                              |
+| Resume schema      | refuse checkpoints without `halfpw-field11-ws14-legal-wall-v1`; on mismatch re-init from `net_weights.bin` |
+| Engine stamp       | block eval/self-play/train if `titanium.exe` hash changed                                                  |
+| Parity/schema      | training blocked unless parity passes and `legal_wall_count` exists                                        |
 
 Before search architecture experiments (`session_v15`, ponder, infinite search), run
 `engine_identity.py --write` and `regression_triage.py`. Do not assume a training problem
@@ -121,6 +140,18 @@ Safe activation order:
 3. Add engine export/inference only as diagnostics.
 4. Let pressure change LMR/extension by at most one ply, with mate/TT/forced-move overrides.
 5. Run A/B matches before making it default.
+
+### Zero-ink MCTS attention (optional teacher)
+
+External AlphaZero MCTS from [quoridor-zero.ink](https://quoridor-zero.ink) — **not** main WDL
+distill. Small rollouts (50–400 visits) → `visitFraction` / prior gaps → same sidecar head.
+
+```powershell
+python -m training.zero_teacher.collect_budget --from-db --limit 100 --visits 400
+python training/train_search_importance.py --data training/data/zero_teacher/labels/search_budget.jsonl
+```
+
+Docs: [`ARCHITECTURE_HANDOFF.md`](ARCHITECTURE_HANDOFF.md) (master), [`zero_teacher/HANDOFF.md`](zero_teacher/HANDOFF.md) (zero-ink).
 
 ## External AlphaZero Data
 

@@ -10,6 +10,7 @@ function Log($msg) {
 }
 
 Log "=== resume bisect ==="
+$env:RUSTFLAGS = "-C target-cpu=native"
 Push-Location "$Root/engine"
 git stash push -u -m "bisect-wip-resume" 2>&1 | Out-File -Append $Log
 git bisect reset 2>&1 | Out-File -Append $Log

@@ -11,6 +11,7 @@ function Log($msg) {
 }
 
 Log "=== bisect + overnight pipeline ==="
+$env:RUSTFLAGS = "-C target-cpu=native"
 
 $GoldenBin = Join-Path $Root "engine/worktrees/partial-golden/target/release/titanium.exe"
 if (-not (Test-Path $GoldenBin)) {

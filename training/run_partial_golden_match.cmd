@@ -2,6 +2,7 @@
 :: 8 games @ 2s — current v15-frozen vs partial-iter golden (abe9ba5). Each game -> all_games.db
 setlocal
 cd /d "%~dp0.."
+set RUSTFLAGS=-C target-cpu=native
 
 set GOLDEN=engine\worktrees\partial-golden\target\release\titanium.exe
 set CURRENT=engine\target\release\titanium.exe

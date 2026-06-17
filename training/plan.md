@@ -2,6 +2,13 @@ Good — now we compress everything into a **single execution-grade spec**. No d
 
 ---
 
+> **HISTORICAL PLAN — SUPERSEDED.**  
+> **Current master spec:** [`ARCHITECTURE_HANDOFF.md`](ARCHITECTURE_HANDOFF.md)  
+> **Current `ws[14]` contract:** `legal_wall_count / 128.0`  
+> Old `ws[14]=corridor_width_me` notes below are **historical only**.
+
+---
+
 # 🧠 ACE v10 — HalfPW + ws[14] LEGAL WALL COUNT SYSTEM (FINAL SPEC)
 
 ## 0. System definition (unchanged architecture)

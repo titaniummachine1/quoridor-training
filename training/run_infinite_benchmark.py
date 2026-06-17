@@ -67,7 +67,7 @@ def run_batch(engine_a, engine_b, batch_size, time_s, concurrency, ponder_time):
     ]
     if not BIN.exists():
         print(f"ERROR: engine binary not found: {BIN}")
-        print("Run: cargo build --release  (in engine/)")
+        print("Run in engine/: $env:RUSTFLAGS='-C target-cpu=native'; cargo build --release -p titanium")
         sys.exit(1)
 
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT))
