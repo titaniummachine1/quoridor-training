@@ -18,44 +18,180 @@ from __future__ import annotations
 import argparse
 import json
 import threading
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from datagen import DB_PATH, insert_single_game, validate_game
-from manifest import format_scoreboard, load_manifest, lookup_prior_wins, save_manifest, update_matchup
-from swiss_tournament import MAX_REMOTE_PARALLEL, pick_one_pairing, pairing_game_entry
+from manifest import format_scoreboard, format_scoreboard_compact, load_manifest, lookup_prior_wins, save_manifest, update_matchup
+from swiss_tournament import (
+    KA_TIME_CONTROLS,
+    MAX_KA_PER_TC,
+    OUR_TIME_CONTROLS,
+    max_remote_parallel,
+    pairing_slot_tag,
+    pick_one_pairing,
+    pairing_game_entry,
+    pool_slots,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
 _lock = threading.Lock()
-_active_remotes: set[str] = set()
+_active_remotes: dict[str, str] = {}  # game_id -> remote tc_b (short/medium/long)
+_active_slots: dict[str, str] = {}  # game_id -> slot tag (ka:short, js, frozen:5s, …)
+_ka_search_holders: dict[str, str | None] = {}  # tc_b -> game_id holding active go/search
+_ka_search_since: dict[str, float] = {}  # tc_b -> monotonic when holder acquired
+_ka_search_conds: dict[str, threading.Condition] = {}
 DEFAULT_PORT = 8765
+KA_SEARCH_ACQUIRE_TIMEOUT_SEC = 900
+# Force-release Ka search lock if worker died mid-think (prevents 15min queue stalls).
+KA_SEARCH_HOLD_MAX_SEC: dict[str, float] = {
+    "intuition": 90,
+    "short": 120,
+    "medium": 180,
+    "long": 240,
+}
+
+
+def _long_remotes_in_flight() -> int:
+    return sum(1 for tc in _active_remotes.values() if tc == "long")
+
+
+def _ka_tc_in_flight(tc: str) -> int:
+    return sum(1 for t in _active_remotes.values() if t == tc)
+
+
+def _ka_tc_slots_free() -> dict[str, bool]:
+    return {tc: _ka_tc_in_flight(tc) < MAX_KA_PER_TC for tc in KA_TIME_CONTROLS}
+
+
+def _ka_search_cond(tc_b: str) -> threading.Condition:
+    if tc_b not in _ka_search_conds:
+        _ka_search_conds[tc_b] = threading.Condition(_lock)
+    return _ka_search_conds[tc_b]
+
+
+def _evict_stale_ka_search(tc_b: str | None = None) -> list[str]:
+    """Drop Ka search locks held longer than preset max (crashed worker / hung WS)."""
+    now = time.monotonic()
+    evicted: list[str] = []
+    for tc in list(_ka_search_holders.keys()):
+        if tc_b is not None and tc != tc_b:
+            continue
+        gid = _ka_search_holders.get(tc)
+        if not gid:
+            continue
+        since = _ka_search_since.get(tc, now)
+        max_hold = KA_SEARCH_HOLD_MAX_SEC.get(tc, 120)
+        if now - since <= max_hold:
+            continue
+        _ka_search_holders[tc] = None
+        _ka_search_since.pop(tc, None)
+        evicted.append(f"{tc}:{gid}")
+        _ka_search_cond(tc).notify_all()
+    return evicted
+
+
+def _acquire_ka_search(tc_b: str, game_id: str, timeout_sec: float = KA_SEARCH_ACQUIRE_TIMEOUT_SEC) -> dict:
+    """FIFO-style master: one active Ka `go` per time preset."""
+    cond = _ka_search_cond(tc_b)
+    with _lock:
+        _evict_stale_ka_search(tc_b)
+        deadline = time.monotonic() + timeout_sec
+        while _ka_search_holders.get(tc_b) not in (None, game_id):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {"ok": False, "error": "ka search queue timeout"}
+            cond.wait(timeout=remaining)
+            _evict_stale_ka_search(tc_b)
+        _ka_search_holders[tc_b] = game_id
+        _ka_search_since[tc_b] = time.monotonic()
+        return {"ok": True, "tc_b": tc_b, "game_id": game_id}
+
+
+def _release_ka_search(tc_b: str, game_id: str) -> dict:
+    cond = _ka_search_cond(tc_b)
+    with _lock:
+        if _ka_search_holders.get(tc_b) == game_id:
+            _ka_search_holders[tc_b] = None
+            _ka_search_since.pop(tc_b, None)
+            cond.notify_all()
+        return {"ok": True}
+
+
+def _count_slots() -> dict:
+    ka = {tc: 0 for tc in KA_TIME_CONTROLS}
+    js = 0
+    frozen = {tc: 0 for tc in OUR_TIME_CONTROLS}
+    ti_pure_10s = 0
+    self_10s = 0
+    for tag in _active_slots.values():
+        if tag.startswith("ka:"):
+            ka[tag[3:]] = ka.get(tag[3:], 0) + 1
+        elif tag == "js":
+            js += 1
+        elif tag.startswith("frozen:"):
+            tc = tag.split(":", 1)[1]
+            frozen[tc] = frozen.get(tc, 0) + 1
+        elif tag == "ti-pure:10s":
+            ti_pure_10s += 1
+        elif tag == "self:10s":
+            self_10s += 1
+    return {
+        "ka": ka,
+        "js": js,
+        "frozen": frozen,
+        "ti_pure_10s": ti_pure_10s,
+        "self_10s": self_10s,
+    }
 
 
 def _claim_pairing() -> dict | None:
-    global _active_remotes
+    global _active_remotes, _active_slots
     manifest = load_manifest()
-    allow_remote = len(_active_remotes) < MAX_REMOTE_PARALLEL
-    pairing = pick_one_pairing(manifest, allow_remote=allow_remote)
+    counts = _count_slots()
+    pairing = pick_one_pairing(
+        manifest,
+        slot_counts=counts,
+        n_pool_slots=pool_slots(),
+    )
     if pairing is None:
         return None
     game_id = uuid.uuid4().hex[:8]
     entry = pairing_game_entry(pairing, game_id, ROOT / "training" / "data")
+    _active_slots[game_id] = pairing_slot_tag(pairing)
     if pairing.kind == "remote":
-        _active_remotes.add(game_id)
+        _active_remotes[game_id] = pairing.tc_b
         entry["release_remote"] = True
     return entry
+
+
+def _release_game_slot(game_id: str | None = None) -> None:
+    global _active_remotes, _active_slots
+    if game_id:
+        _active_slots.pop(game_id, None)
+        _release_remote(game_id)
+    elif _active_slots:
+        gid = next(iter(_active_slots))
+        _active_slots.pop(gid, None)
+        _release_remote(gid)
 
 
 def _release_remote(game_id: str | None = None) -> None:
     global _active_remotes
     if game_id:
-        _active_remotes.discard(game_id)
-    else:
-        if _active_remotes:
-            _active_remotes.pop()
+        _active_remotes.pop(game_id, None)
+        for tc in list(_ka_search_holders.keys()):
+            if _ka_search_holders.get(tc) == game_id:
+                _release_ka_search(tc, game_id)
+    elif _active_remotes:
+        gid, tc = next(iter(_active_remotes.items()))
+        _active_remotes.pop(gid, None)
+        if _ka_search_holders.get(tc) == gid:
+            _release_ka_search(tc, gid)
 
 
 def _record_game_done() -> None:
@@ -98,11 +234,19 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 pool = eligible_pairings(load_manifest())
                 local_n = sum(1 for p in pool if p.kind == "local")
                 remote_n = sum(1 for p in pool if p.kind == "remote")
+                slot_counts = _count_slots()
             self._send_json(200, {
                 "pairings": len(pool),
                 "local_pairings": local_n,
                 "remote_pairings": remote_n,
                 "remote_in_flight": len(_active_remotes),
+                "slots_in_flight": len(_active_slots),
+                "slot_counts": slot_counts,
+                "ka_long_in_flight": _long_remotes_in_flight(),
+                "ka_per_tc_in_flight": {tc: _ka_tc_in_flight(tc) for tc in KA_TIME_CONTROLS},
+                "ka_per_tc_max": MAX_KA_PER_TC,
+                "ka_search_holders": dict(_ka_search_holders),
+                "max_remote_parallel": max_remote_parallel(),
             })
             return
 
@@ -123,9 +267,12 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/scoreboard":
+            q = parse_qs(parsed.query)
+            compact = (q.get("compact") or ["0"])[0] in ("1", "true", "yes")
             with _lock:
-                text = format_scoreboard(load_manifest())
-            self._send_json(200, {"text": text})
+                manifest = load_manifest()
+                text = format_scoreboard_compact(manifest) if compact else format_scoreboard(manifest)
+            self._send_json(200, {"text": text, "compact": compact})
             return
 
         self._send_json(404, {"error": "not found"})
@@ -166,8 +313,30 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
         if path == "/api/release-remote":
             game_id = body.get("game_id")
             with _lock:
-                _release_remote(game_id)
+                _release_game_slot(game_id)
             self._send_json(200, {"ok": True})
+            return
+
+        if path == "/api/ka-search-acquire":
+            tc_b = body.get("tc_b") or body.get("tc")
+            game_id = body.get("game_id")
+            if not tc_b or not game_id:
+                self._send_json(400, {"error": "need tc_b and game_id"})
+                return
+            timeout = float(body.get("timeout_sec") or KA_SEARCH_ACQUIRE_TIMEOUT_SEC)
+            result = _acquire_ka_search(str(tc_b), str(game_id), timeout)
+            code = 200 if result.get("ok") else 503
+            self._send_json(code, result)
+            return
+
+        if path == "/api/ka-search-release":
+            tc_b = body.get("tc_b") or body.get("tc")
+            game_id = body.get("game_id")
+            if not tc_b or not game_id:
+                self._send_json(400, {"error": "need tc_b and game_id"})
+                return
+            result = _release_ka_search(str(tc_b), str(game_id))
+            self._send_json(200, result)
             return
 
         if path == "/api/game":
@@ -189,8 +358,8 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 except ValueError as e:
                     self._send_json(400, {"error": str(e)})
                     return
-                if body.get("release_remote"):
-                    _release_remote(body.get("game_id"))
+                if body.get("release_remote") or body.get("game_id"):
+                    _release_game_slot(body.get("game_id"))
                 _record_game_done()
             self._send_json(200, {"ok": True, "game_id": gid})
             return

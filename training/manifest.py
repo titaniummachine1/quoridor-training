@@ -2,7 +2,7 @@
 
 Per matchup: only a_wins / b_wins (+ optional time-control labels).
 Elo diff recomputed from W/L ratio. Global ladder propagates diffs from
-anchor ace-v13@5s = 1200 (JS v13 in site; ti-pure Rust port is stronger, not anchor).
+anchor ace-v13-ti-pure@5s = 1200 (Rust ti-pure; JS ace-v13 is bench-only).
 """
 
 from __future__ import annotations
@@ -22,8 +22,12 @@ STATUS_PATH = DATA / "STATUS.txt"
 LOCK_PATH = DATA / "manifest.lock"
 
 CURRENT_ENGINE = "titanium-v15"
-# Ladder anchor only — site JS v13 reference @ 1200. NOT ti-pure Rust, NOT v15.
-ANCHOR_ENGINE = "ace-v13"
+FROZEN_ENGINE = "titanium-v15-frozen"
+V15_SHORT = "v15"
+V15_FROZEN_SHORT = "v15-frozen"
+OUR_TRACKED_TCS = ("5s", "10s")
+# Ladder anchor — Rust ace-v13-ti-pure @ 1200 (same binary as train/deploy gate).
+ANCHOR_ENGINE = "ace-v13-ti-pure"
 BASELINE_ENGINE = ANCHOR_ENGINE
 # Bare "titanium" = legacy GameSearchSession (MCTS), NOT v15 or ace-v13 — exclude from ladder.
 DEPRECATED_LADDER_ENGINES = frozenset({"titanium", "titanium-cert", "titanium-plain"})
@@ -37,7 +41,7 @@ REMOTE_TIME_LABELS = {
     "medium": "Medium",
     "long": "Long",
 }
-# JS ace-v13 @ 5s pinned as reference (~weaker than ti-pure Rust port).
+# ti-pure @ 5s pinned as ladder reference.
 ANCHOR_RATING = 1200.0
 MIN_GAMES_GLOBAL = 2  # include Ka/remote on ladder after a few games
 MIN_GAMES_LADDER_STABLE = 4  # shown as note in STATUS when below this
@@ -69,6 +73,23 @@ def is_deprecated_entity(ent: str) -> bool:
     return is_deprecated_engine(ent.split("@", 1)[0])
 
 
+def engine_display_short(engine: str, tc: str | None = None) -> str:
+    """Compact engine@tc label for pool dock + matchups."""
+    tc = (tc or "5s").strip()
+    if engine == CURRENT_ENGINE:
+        return f"{V15_SHORT}@{tc}"
+    if engine == FROZEN_ENGINE:
+        return f"{V15_FROZEN_SHORT}@{tc}"
+    if engine == "ace-v13":
+        return f"JS-v13@{tc}"
+    if engine == ANCHOR_ENGINE:
+        return f"ti-pure@{tc}"
+    if engine in REMOTE_ENGINES:
+        ui = REMOTE_TIME_LABELS.get(tc, tc)
+        return f"Ka-{ui}"
+    return f"{engine}@{tc}"
+
+
 def display_entity(ent: str) -> str:
     """Scoreboard-friendly label (remote presets show UI time name)."""
     if "@" not in ent:
@@ -76,10 +97,26 @@ def display_entity(ent: str) -> str:
     base, tc = ent.split("@", 1)
     if base in REMOTE_ENGINES:
         ui = REMOTE_TIME_LABELS.get(tc, tc)
-        return f"{base}@{tc} ({ui} @ Alpha)"
+        return f"Ka@{tc} ({ui} @ Alpha)"
     if base == ANCHOR_ENGINE:
-        return f"{ent} (JS v13 ref)"
+        return f"ti-pure@{tc} (Rust ref)"
+    if base == "ace-v13":
+        return f"JS-v13@{tc} (bench)"
+    if base == FROZEN_ENGINE:
+        return f"{V15_FROZEN_SHORT}@{tc} (HalfPW frozen)"
+    if base == CURRENT_ENGINE:
+        return f"{V15_SHORT}@{tc} (HalfPW live)"
     return ent
+
+
+def _short_engine(engine: str, tc: str | None = None) -> str:
+    return engine_display_short(engine, tc)
+
+
+def display_matchup_label(m: dict) -> str:
+    tc_a = m.get("tc_a", "5s")
+    tc_b = m.get("tc_b", "5s")
+    return f"{_short_engine(m['a_engine'], tc_a)} vs {_short_engine(m['b_engine'], tc_b)}"
 
 
 def matchup_key(
@@ -235,19 +272,6 @@ def compute_global_ratings(matchups: dict) -> dict[str, dict]:
         entities.add(eb)
         edges.append((ea, eb, float(diff)))
 
-    # Same engine @ different time controls = same strength (link for graph propagation).
-    by_base: dict[str, set[str]] = defaultdict(set)
-    for ent in list(entities):
-        base = ent.split("@", 1)[0]
-        by_base[base].add(ent)
-    anchor_v15 = entity_label(CURRENT_ENGINE, "5s")
-    for ent in list(entities):
-        base = ent.split("@", 1)[0]
-        if base == CURRENT_ENGINE and ent != anchor_v15:
-            entities.add(anchor_v15)
-            edges.append((ent, anchor_v15, 0.0))
-            edges.append((anchor_v15, ent, 0.0))
-
     ratings: dict[str, float] = {ANCHOR_ENTITY: ANCHOR_RATING}
     for _ in range(40):
         accum: dict[str, list[float]] = defaultdict(list)
@@ -267,11 +291,11 @@ def compute_global_ratings(matchups: dict) -> dict[str, dict]:
         if not changed:
             break
 
-    # Same engine @ different time controls = same strength (our engine only; remotes rank per preset).
+    # Same engine @ different time controls = same strength (remotes only; v15 tracks per tc).
     bases: dict[str, list[float]] = defaultdict(list)
     for ent, r in ratings.items():
         base = ent.split("@", 1)[0]
-        if base in REMOTE_ENGINES:
+        if base in REMOTE_ENGINES or base in (CURRENT_ENGINE, FROZEN_ENGINE):
             continue
         bases[base].append(r)
     base_rating = {b: sum(v) / len(v) for b, v in bases.items() if v}
@@ -279,7 +303,7 @@ def compute_global_ratings(matchups: dict) -> dict[str, dict]:
         if ent in ratings:
             continue
         base = ent.split("@", 1)[0]
-        if base in REMOTE_ENGINES:
+        if base in REMOTE_ENGINES or base in (CURRENT_ENGINE, FROZEN_ENGINE):
             continue
         if base in base_rating:
             ratings[ent] = base_rating[base]
@@ -442,10 +466,145 @@ def update_source(name: str, games_file: str | Path, **extra) -> None:
     save_manifest(manifest)
 
 
+def _board_width() -> int:
+    try:
+        import shutil
+        return max(72, min(120, shutil.get_terminal_size(fallback=(100, 40)).columns))
+    except Exception:
+        return 100
+
+
 def _format_tc(tc_a: str, tc_b: str) -> str:
     if tc_a == tc_b:
         return tc_a
     return f"A:{tc_a} B:{tc_b}"
+
+
+def _nnue_status_line() -> str:
+    try:
+        from plateau_probe import nnue_status_compact
+        return nnue_status_compact()
+    except Exception:
+        pass
+    try:
+        g = json.loads((DATA / "nnue_guard_state.json").read_text(encoding="utf-8"))
+        return f"NNUE  trained {g.get('games_trained', '?')}  deploys {g.get('deploy_runs', 0)}"
+    except Exception:
+        return "NNUE  (status unavailable)"
+
+
+def format_scoreboard_compact(manifest: dict) -> str:
+    """Short dashboard for live pool terminal — one opponent table + our v15."""
+    matchups = manifest.get("matchups", {})
+    global_ratings = compute_global_ratings(matchups)
+    t = manifest.get("tournament", {})
+    try:
+        from datagen import count_pool_games, max_game_id
+        pool_db = count_pool_games(Path(PATHS["training_db"]))
+        total_db = max_game_id(Path(PATHS["training_db"]))
+    except Exception:
+        pool_db = _count_lines(Path(PATHS["training_db"]))
+        total_db = pool_db
+    pool_run = int(t.get("games", 0)) if t.get("mode") == "random-pool" else 0
+    slots = t.get("parallel", 7)
+
+    cur5 = entity_label(CURRENT_ENGINE, "5s")
+    cur10 = entity_label(CURRENT_ENGINE, "10s")
+    gr5 = global_ratings.get(cur5, {})
+    gr10 = global_ratings.get(cur10, {})
+    v15_elo = int(gr5.get("rating", 0)) if gr5 else 0
+    v15_d = v15_elo - int(ANCHOR_RATING) if gr5 else 0
+    v15_sign = "+" if v15_d >= 0 else ""
+
+    def opp_label(m: dict) -> tuple[str, str]:
+        eb = m.get("b_engine", "")
+        tc_a, tc_b = m.get("tc_a", "5s"), m.get("tc_b", "5s")
+        if eb == "ka":
+            label = "Ka-imm" if tc_b == "intuition" else f"Ka-{tc_b}"
+            ent = f"ka@{tc_b}"
+        elif eb == "ace-v13":
+            label = f"JS-v13@{tc_a}"
+            ent = entity_label("ace-v13", tc_a)
+        elif eb == ANCHOR_ENGINE:
+            label = f"ti-pure@{tc_a}"
+            ent = entity_label(ANCHOR_ENGINE, tc_a)
+        elif eb == FROZEN_ENGINE:
+            label = f"v15-frozen@{tc_a}"
+            ent = entity_label(FROZEN_ENGINE, tc_a)
+        else:
+            label = f"{eb}@{tc_b}"
+            ent = entity_label(eb, tc_b)
+        return label, ent
+
+    def vs_us_note(m: dict, aw: int, bw: int, n: int, diff: float | None) -> str:
+        eb = m.get("b_engine", "")
+        if eb == ANCHOR_ENGINE:
+            return "anchor"
+        if eb == FROZEN_ENGINE:
+            return "past-self"
+        if eb == "ace-v13":
+            return "js orig"
+        if diff is not None and diff < -50:
+            return "losing"
+        if aw == 0 and bw > 0 and n >= 3:
+            return "losing"
+        if aw > bw and n >= 2:
+            return "winning"
+        return "even"
+
+    rows: list[tuple[float, str]] = []
+    for m in matchups.values():
+        if m.get("a_engine") != CURRENT_ENGINE:
+            continue
+        if m.get("b_engine") == CURRENT_ENGINE:
+            continue
+        n = m.get("games_played", m.get("a_wins", 0) + m.get("b_wins", 0))
+        if n == 0:
+            continue
+        label, ent = opp_label(m)
+        aw, bw = m.get("a_wins", 0), m.get("b_wins", 0)
+        diff = m.get("elo_a_vs_b")
+        diff_s = f"{diff:+.0f}" if diff is not None else "  ?"
+        gr = global_ratings.get(ent, {})
+        elo = float(gr.get("rating", 0))
+        note = vs_us_note(m, aw, bw, n, diff)
+        line = (
+            f"| {label:<16} | {int(elo):>4} | {aw:>2}-{bw:<2} | {n:>3} | {diff_s:>6} | {note:<8} |"
+        )
+        rows.append((elo, line))
+    rows.sort(key=lambda x: -x[0])
+
+    w = 72
+    lines = [
+        "+" + "-" * w + "+",
+        f"| QUORIDOR POOL  run={pool_run}  pool={pool_db}  total={total_db}  slots={slots}"
+        f"  v15@5s={v15_elo} ({v15_sign}{v15_d})".ljust(w - 1) + "|",
+        "+" + "-" * w + "+",
+        "| opponent         | Elo  | W-L |  n  |  H2H  | vs us    |",
+        "|------------------+------+-----+-----+-------+----------|",
+    ]
+    for i, (_, line) in enumerate(rows[:11], 1):
+        lines.append(line)
+    if len(rows) > 11:
+        lines.append(f"| ... +{len(rows) - 11} more opponents".ljust(w - 1) + "|")
+    lines.append("+" + "-" * w + "+")
+    if gr10.get("games", 0):
+        r10 = gr10.get("rating", 0)
+        lines.append(
+            f"| v15@10s {r10} Elo  {gr10.get('wins',0)}-{gr10.get('losses',0)}"
+            f" ({gr10.get('games',0)}g)".ljust(w - 1) + "|"
+        )
+    lines.append("+" + "-" * w + "+")
+    try:
+        from nnue_learning_metrics import format_scoreboard_train_block
+        lines.extend(format_scoreboard_train_block())
+    except Exception:
+        nnue = _nnue_status_line().strip()
+        if len(nnue) > w - 4:
+            nnue = nnue[: w - 7] + "..."
+        lines.append("| " + nnue.ljust(w - 4) + " |")
+    lines.append("+" + "-" * w + "+")
+    return "\n".join(lines)
 
 
 def format_scoreboard(manifest: dict) -> str:
@@ -453,13 +612,24 @@ def format_scoreboard(manifest: dict) -> str:
     matchups = manifest.get("matchups", {})
     global_ratings = compute_global_ratings(matchups)
     t = manifest.get("tournament", {})
-    db_records = _count_lines(Path(PATHS["training_db"]))
+    db_path = Path(PATHS["training_db"])
+    db_records = _count_lines(db_path)
+    try:
+        from datagen import count_pool_games
 
+        pool_db = count_pool_games(db_path)
+    except Exception:
+        pool_db = db_records
+    legacy_db = max(0, db_records - pool_db)
+
+    bw = _board_width()
     lines = [
         "",
-        "=" * 72,
-        f" SCOREBOARD   anchor {display_entity(ANCHOR_ENTITY)} = {int(ANCHOR_RATING)} Elo   |   {db_records} games in DB",
-        "=" * 72,
+        "=" * bw,
+        f" SCOREBOARD   anchor {display_entity(ANCHOR_ENTITY)} = {int(ANCHOR_RATING)} Elo"
+        f"   |   {pool_db} pool games in DB"
+        + (f"  (+{legacy_db} older rows kept, excluded from ladder)" if legacy_db else ""),
+        "=" * bw,
     ]
     if t:
         mode = t.get("mode", "random")
@@ -471,9 +641,12 @@ def format_scoreboard(manifest: dict) -> str:
             if last:
                 lines.append(f" Last batch: {', '.join(last)}")
         elif mode == "random-pool":
-            games = t.get("games", 0)
+            pool_run = int(t.get("games", 0))
             par = t.get("parallel", 4)
-            lines.append(f" Continuous pool  |  {par} independent slots  |  {games} games completed")
+            lines.append(
+                f" Continuous pool  |  {par} slots  |  {pool_run} games this pool run"
+                f"  |  {pool_db} pool-tagged in DB"
+            )
         elif mode == "round_robin":
             cycle = t.get("cycle", 1)
             idx = t.get("cycle_index", 0)
@@ -489,7 +662,7 @@ def format_scoreboard(manifest: dict) -> str:
                 f" Swiss round {t.get('round', '?')}  |  last: {t.get('last_pairing', '?')} ({t.get('last_kind', '?')})"
             )
             lines.append(f" Last pairing: {t.get('last_pairing', '?')}")
-        lines.append("-" * 72)
+        lines.append("-" * bw)
 
     if global_ratings:
         lines.append(" GLOBAL LADDER")
@@ -506,12 +679,18 @@ def format_scoreboard(manifest: dict) -> str:
             lines.append(
                 f"  #{i:<2} {display_entity(ent):<34} {info['rating']:>4} Elo   {w}-{l}  ({g}g, {wr}){tag}"
             )
-        cur = entity_label(CURRENT_ENGINE, "5s")
-        if cur in global_ratings:
-            delta = global_ratings[cur]["rating"] - int(ANCHOR_RATING)
-            sign = "+" if delta >= 0 else ""
-            lines.append(f"  >> {cur} = {global_ratings[cur]['rating']} ({sign}{delta} vs anchor)")
         wl = aggregate_entity_wl(matchups)
+        cur5 = entity_label(CURRENT_ENGINE, "5s")
+        if cur5 in global_ratings:
+            delta = global_ratings[cur5]["rating"] - int(ANCHOR_RATING)
+            sign = "+" if delta >= 0 else ""
+            lines.append(f"  >> {display_entity(cur5)} = {global_ratings[cur5]['rating']} ({sign}{delta} vs anchor)")
+        cur10 = entity_label(CURRENT_ENGINE, "10s")
+        s10 = wl.get(cur10, {"games": 0})
+        if cur10 in global_ratings:
+            lines.append(f"  >> {display_entity(cur10)} = {global_ratings[cur10]['rating']} Elo")
+        elif s10.get("games", 0) == 0:
+            lines.append(f"  >> {display_entity(cur10)} - awaiting pool games @10s")
         shown = {ent for ent, _ in ranked}
         pending = [
             (ent, wl[ent])
@@ -523,7 +702,25 @@ def format_scoreboard(manifest: dict) -> str:
             lines.append(
                 f"  .. {display_entity(ent):<34}   -- Elo   {w}-{l}  ({g}g) [pending graph]"
             )
-        lines.append("-" * 72)
+        lines.append("-" * bw)
+        lines.append(" V15 LIVE vs FROZEN (by think time)")
+        for tc in OUR_TRACKED_TCS:
+            for engine in (CURRENT_ENGINE, FROZEN_ENGINE):
+                ent = entity_label(engine, tc)
+                s = wl.get(ent, {"wins": 0, "losses": 0, "games": 0})
+                w, l, g = s.get("wins", 0), s.get("losses", 0), s.get("games", 0)
+                gr = global_ratings.get(ent, {})
+                if g >= MIN_GAMES_GLOBAL and gr.get("rating") is not None:
+                    elo_s = f"{gr['rating']:>4} Elo"
+                elif g > 0:
+                    elo_s = "  -- Elo"
+                else:
+                    elo_s = "  -- Elo"
+                slot = " [pool]" if g == 0 else ""
+                lines.append(
+                    f"  {display_entity(ent):<34} {elo_s}   {w}-{l}  ({g}g){slot}"
+                )
+        lines.append("-" * bw)
 
     if matchups:
         lines.append(" MATCHUPS (A wins - B wins)")
@@ -540,16 +737,17 @@ def format_scoreboard(manifest: dict) -> str:
             elo_s = f"{elo:+.0f}" if elo is not None else "?"
             se = ((aw / n * (1 - aw / n)) / n) ** 0.5 * 196 if n else 0
             tc = _format_tc(m.get("tc_a", "5s"), m.get("tc_b", "5s"))
-            label = f"{m['a_engine']} vs {m['b_engine']}"
+            label = display_matchup_label(m)
             rows.append((label, tc, aw, bw, n, elo_s, se))
         for label, tc, aw, bw, n, elo_s, se in rows:
+            tc_col = f"({tc})" if tc != "5s" else ""
             lines.append(
-                f"  {label:<28} ({tc:<14})  {aw:>3}-{bw:<3}  {n:>4}g  ~{elo_s} diff (+/-{se:.0f}%)"
+                f"  {label:<36} {tc_col:<8}  {aw:>3}-{bw:<3}  {n:>4}g  ~{elo_s} diff (+/-{se:.0f}%)"
             )
     else:
         lines.append(" (no matchups yet)")
 
-    lines.append("=" * 72)
+    lines.append("=" * bw)
     lines.append("")
     return "\n".join(lines)
 
@@ -582,7 +780,7 @@ def _write_status_txt(manifest: dict) -> None:
 
     if global_ratings:
         lines.append(
-            f"GLOBAL RATING LADDER (anchor {int(ANCHOR_RATING)} = JS {BASELINE_ENGINE}; "
+            f"GLOBAL RATING LADDER (anchor {int(ANCHOR_RATING)} = {BASELINE_ENGINE}; "
             "direct H2H is more precise per pairing):"
         )
         ranked = sorted(

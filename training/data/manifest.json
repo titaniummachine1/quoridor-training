@@ -9,18 +9,18 @@
   },
   "sources": {},
   "current_engine": "titanium-v15",
-  "baseline_engine": "ace-v13",
-  "updated_at": "2026-06-16T19:38:30.552634+00:00",
+  "baseline_engine": "ace-v13-ti-pure",
+  "updated_at": "2026-06-17T17:45:16.418625+00:00",
   "matchups": {
     "titanium-v15|ace-v13-ti-pure|5s|5s": {
       "a_engine": "titanium-v15",
       "b_engine": "ace-v13-ti-pure",
       "tc_a": "5s",
       "tc_b": "5s",
-      "a_wins": 45,
-      "b_wins": 24,
-      "games_played": 69,
-      "elo_a_vs_b": 107.5,
+      "a_wins": 58,
+      "b_wins": 33,
+      "games_played": 91,
+      "elo_a_vs_b": 96.8,
       "last_source": "pool-titanium-v15-vs-ace-v13-ti-pure-5s"
     },
     "titanium-v15|ka|5s|short": {
@@ -28,22 +28,11 @@
       "b_engine": "ka",
       "tc_a": "5s",
       "tc_b": "short",
-      "a_wins": 0,
-      "b_wins": 3,
-      "games_played": 3,
-      "elo_a_vs_b": -338.0,
+      "a_wins": 1,
+      "b_wins": 41,
+      "games_played": 42,
+      "elo_a_vs_b": -576.8,
       "last_source": "pool-v15-vs-ka-short"
-    },
-    "titanium-v15|ka|5s|intuition": {
-      "a_engine": "titanium-v15",
-      "b_engine": "ka",
-      "tc_a": "5s",
-      "tc_b": "intuition",
-      "a_wins": 4,
-      "b_wins": 2,
-      "games_played": 6,
-      "elo_a_vs_b": 102.1,
-      "last_source": "pool-v15-vs-ka-intuition"
     },
     "titanium-v15|ka|5s|medium": {
       "a_engine": "titanium-v15",
@@ -51,31 +40,20 @@
       "tc_a": "5s",
       "tc_b": "medium",
       "a_wins": 0,
-      "b_wins": 5,
-      "games_played": 5,
-      "elo_a_vs_b": -416.6,
+      "b_wins": 34,
+      "games_played": 34,
+      "elo_a_vs_b": -735.5,
       "last_source": "pool-v15-vs-ka-medium"
-    },
-    "ace-v13-ti-pure|ace-v13|5s|5s": {
-      "a_engine": "ace-v13-ti-pure",
-      "b_engine": "ace-v13",
-      "tc_a": "5s",
-      "tc_b": "5s",
-      "a_wins": 28,
-      "b_wins": 40,
-      "games_played": 68,
-      "elo_a_vs_b": -61.0,
-      "last_source": "pool-ace-v13-ti-pure-vs-ace-v13-5s"
     },
     "titanium-v15|ace-v13|5s|5s": {
       "a_engine": "titanium-v15",
       "b_engine": "ace-v13",
       "tc_a": "5s",
       "tc_b": "5s",
-      "a_wins": 32,
-      "b_wins": 42,
-      "games_played": 74,
-      "elo_a_vs_b": -46.6,
+      "a_wins": 47,
+      "b_wins": 45,
+      "games_played": 92,
+      "elo_a_vs_b": 7.5,
       "last_source": "pool-titanium-v15-vs-ace-v13-5s"
     },
     "titanium-v15|ka|5s|long": {
@@ -84,86 +62,174 @@
       "tc_a": "5s",
       "tc_b": "long",
       "a_wins": 0,
-      "b_wins": 3,
-      "games_played": 3,
-      "elo_a_vs_b": -338.0,
+      "b_wins": 17,
+      "games_played": 17,
+      "elo_a_vs_b": -617.6,
       "last_source": "pool-v15-vs-ka-long"
+    },
+    "titanium-v15|titanium-v15-frozen|5s|5s": {
+      "a_engine": "titanium-v15",
+      "b_engine": "titanium-v15-frozen",
+      "tc_a": "5s",
+      "tc_b": "5s",
+      "a_wins": 161,
+      "b_wins": 44,
+      "games_played": 205,
+      "elo_a_vs_b": 223.9,
+      "last_source": "pool-titanium-v15-vs-titanium-v15-frozen-5s"
+    },
+    "titanium-v15|titanium-v15-frozen|10s|10s": {
+      "a_engine": "titanium-v15",
+      "b_engine": "titanium-v15-frozen",
+      "tc_a": "10s",
+      "tc_b": "10s",
+      "a_wins": 3,
+      "b_wins": 0,
+      "games_played": 3,
+      "elo_a_vs_b": 338.0,
+      "last_source": "pool-titanium-v15-vs-titanium-v15-frozen-10s"
+    },
+    "titanium-v15|titanium-v15|10s|10s": {
+      "a_engine": "titanium-v15",
+      "b_engine": "titanium-v15",
+      "tc_a": "10s",
+      "tc_b": "10s",
+      "a_wins": 71,
+      "b_wins": 34,
+      "games_played": 105,
+      "elo_a_vs_b": 126.6,
+      "last_source": "pool-titanium-v15-vs-titanium-v15-10s"
+    },
+    "titanium-v15|ace-v13-ti-pure|10s|10s": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ace-v13-ti-pure",
+      "tc_a": "10s",
+      "tc_b": "10s",
+      "a_wins": 42,
+      "b_wins": 40,
+      "games_played": 82,
+      "elo_a_vs_b": 8.4,
+      "last_source": "pool-titanium-v15-vs-ace-v13-ti-pure-10s"
+    },
+    "titanium-v15|ka|5s|intuition": {
+      "a_engine": "titanium-v15",
+      "b_engine": "ka",
+      "tc_a": "5s",
+      "tc_b": "intuition",
+      "a_wins": 24,
+      "b_wins": 4,
+      "games_played": 28,
+      "elo_a_vs_b": 294.4,
+      "last_source": "pool-v15-vs-ka-intuition"
     }
   },
-  "anchor_entity": "ace-v13@5s",
+  "anchor_entity": "ace-v13-ti-pure@5s",
   "anchor_rating": 1200.0,
   "strength_tracker": {
     "a_engine": "titanium-v15",
-    "b_engine": "ace-v13",
+    "b_engine": "ace-v13-ti-pure",
     "tc_a": "5s",
     "tc_b": "5s",
-    "a_wins": 32,
-    "b_wins": 42,
-    "games_played": 74,
-    "elo_a_vs_b": -46.6,
-    "last_source": "pool-titanium-v15-vs-ace-v13-5s",
-    "elo_vs_baseline": -46.6
+    "a_wins": 58,
+    "b_wins": 33,
+    "games_played": 91,
+    "elo_a_vs_b": 96.8,
+    "last_source": "pool-titanium-v15-vs-ace-v13-ti-pure-5s",
+    "elo_vs_baseline": 96.8
   },
   "global_ratings": {
-    "ka@short": {
-      "rating": 1522,
-      "wins": 3,
-      "losses": 0,
-      "games": 3,
-      "anchor": false,
-      "provisional": true
-    },
-    "ka@medium": {
-      "rating": 1601,
-      "wins": 5,
-      "losses": 0,
-      "games": 5,
+    "ace-v13-ti-pure@10s": {
+      "rating": 1200,
+      "wins": 40,
+      "losses": 42,
+      "games": 82,
       "anchor": false,
       "provisional": false
-    },
-    "ka@intuition": {
-      "rating": 1082,
-      "wins": 2,
-      "losses": 4,
-      "games": 6,
-      "anchor": false,
-      "provisional": false
-    },
-    "ace-v13-ti-pure@5s": {
-      "rating": 1108,
-      "wins": 52,
-      "losses": 85,
-      "games": 137,
-      "anchor": false,
-      "provisional": false
-    },
-    "ka@long": {
-      "rating": 1522,
-      "wins": 3,
-      "losses": 0,
-      "games": 3,
-      "anchor": false,
-      "provisional": true
     },
     "titanium-v15@5s": {
-      "rating": 1184,
-      "wins": 81,
-      "losses": 79,
-      "games": 160,
+      "rating": 1297,
+      "wins": 291,
+      "losses": 218,
+      "games": 509,
+      "anchor": false,
+      "provisional": false
+    },
+    "ka@medium": {
+      "rating": 2032,
+      "wins": 34,
+      "losses": 0,
+      "games": 34,
       "anchor": false,
       "provisional": false
     },
     "ace-v13@5s": {
+      "rating": 1289,
+      "wins": 45,
+      "losses": 47,
+      "games": 92,
+      "anchor": false,
+      "provisional": false
+    },
+    "titanium-v15-frozen@5s": {
+      "rating": 1073,
+      "wins": 44,
+      "losses": 161,
+      "games": 205,
+      "anchor": false,
+      "provisional": false
+    },
+    "ka@short": {
+      "rating": 1874,
+      "wins": 41,
+      "losses": 1,
+      "games": 42,
+      "anchor": false,
+      "provisional": false
+    },
+    "titanium-v15@10s": {
+      "rating": 1208,
+      "wins": 150,
+      "losses": 145,
+      "games": 295,
+      "anchor": false,
+      "provisional": false
+    },
+    "ka@intuition": {
+      "rating": 1002,
+      "wins": 4,
+      "losses": 24,
+      "games": 28,
+      "anchor": false,
+      "provisional": false
+    },
+    "ace-v13-ti-pure@5s": {
       "rating": 1200,
-      "wins": 82,
-      "losses": 60,
-      "games": 142,
+      "wins": 33,
+      "losses": 58,
+      "games": 91,
       "anchor": true,
+      "provisional": false
+    },
+    "titanium-v15-frozen@10s": {
+      "rating": 870,
+      "wins": 0,
+      "losses": 3,
+      "games": 3,
+      "anchor": false,
+      "provisional": true
+    },
+    "ka@long": {
+      "rating": 1914,
+      "wins": 17,
+      "losses": 0,
+      "games": 17,
+      "anchor": false,
       "provisional": false
     }
   },
   "tournament": {
     "mode": "random-pool",
-    "games": 543
+    "games": 1151,
+    "parallel": 7
   }
 }

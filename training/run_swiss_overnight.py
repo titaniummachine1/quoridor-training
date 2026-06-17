@@ -1,12 +1,15 @@
 """Random overnight tournament — global Elo ladder.
 
-Four independent game slots run forever; each slot claims the next pairing as
-soon as it finishes (no waiting for slow Ka games). One Node process + progress dock.
+Up to 8 independent game slots (7 when background NNUE is on — one thread for
+eval-batch micro-train). Each slot claims the next pairing as soon as it finishes.
+One Node process + progress dock.
 
-Anchor: ace-v13@5s = 1200 Elo (JS v13; ti-pure Rust is stronger, not the anchor).
+Anchor: ace-v13-ti-pure@5s = 1200 Elo (Rust ti-pure; JS ace-v13 is bench-only).
 
 Usage:
     python training/run_swiss_overnight.py
+    python training/run_swiss_overnight.py --parallel 8
+    python training/run_swiss_overnight.py --no-train          # 8 slots, no NNUE
     python training/run_swiss_overnight.py --list
     python training/run_swiss_overnight.py --scoreboard
 """
@@ -27,6 +30,20 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+POOL_STARTUP_LOG = ROOT / "training" / "data" / "pool_startup.log"
+
+
+def _pool_log(msg: str) -> None:
+    POOL_STARTUP_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(POOL_STARTUP_LOG, "a", encoding="utf-8") as f:
+        f.write(msg.rstrip() + "\n")
+
+
+def _pool_print(msg: str) -> None:
+    """Startup chatter goes to log file; live UI is the Node progress dock."""
+    _pool_log(msg)
+    if os.environ.get("POOL_VERBOSE") == "1":
+        print(msg, flush=True)
 sys.path.insert(0, str(ROOT / "training"))
 
 from manifest import (  # noqa: E402
@@ -40,9 +57,13 @@ from manifest import (  # noqa: E402
 from nnue_guards import DEPLOY_EVERY_GAMES, HALFPW_WEIGHT_BYTES, net_weights_size_ok  # noqa: E402
 from engine_identity import assert_engine_ready  # noqa: E402
 from swiss_tournament import (  # noqa: E402
-    PARALLEL_MATCHUPS,
+    KA_TIME_CONTROLS,
+    MAX_KA_PER_TC,
+    POOL_SLOTS_MAX,
+    POOL_SLOTS_WITH_TRAIN,
     Pairing,
     list_pairings,
+    pool_slots,
 )
 
 WEIGHTS = ROOT / "engine" / "src" / "acev13" / "net_weights.bin"
@@ -131,14 +152,14 @@ def coordinator_url() -> str:
     return os.environ.get("COORDINATOR_URL", f"http://127.0.0.1:{COORD_PORT}")
 
 
-def start_coordinator() -> None:
+def start_coordinator(*, slots: int) -> None:
     global _coord_proc
     url = coordinator_url()
 
     # --- Kill any coordinator tracked from a previous run ---
     stale_pid = _read_coord_pid()
     if stale_pid is not None:
-        print(f"  Killing stale coordinator (pid {stale_pid})...", flush=True)
+        _pool_print(f"  Killing stale coordinator (pid {stale_pid})...")
         _kill_pid(stale_pid)
         _clear_coord_pid()
         time.sleep(0.3)
@@ -152,7 +173,7 @@ def start_coordinator() -> None:
         pass
 
     if port_occupied:
-        print(f"  Port {COORD_PORT} still occupied — force-killing by port...", flush=True)
+        _pool_print(f"  Port {COORD_PORT} still occupied — force-killing by port...")
         _kill_coordinator_by_port(COORD_PORT)
         # Wait up to 3 s for port to free
         for _ in range(15):
@@ -163,18 +184,21 @@ def start_coordinator() -> None:
                 break
 
     # --- Start a fresh coordinator (stdout/stderr suppressed — not needed) ---
+    coord_env = os.environ.copy()
+    coord_env["POOL_SLOTS"] = str(slots)
     _coord_proc = subprocess.Popen(
         [sys.executable, str(COORD_SCRIPT), "--port", str(COORD_PORT)],
         cwd=str(ROOT),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=coord_env,
     )
     _write_coord_pid(_coord_proc.pid)
 
     for _ in range(40):
         try:
             urllib.request.urlopen(f"{url}/health", timeout=0.5)
-            print(f"  coordinator {url} (pid {_coord_proc.pid}, single writer)", flush=True)
+            _pool_print(f"  coordinator {url} (pid {_coord_proc.pid}, single writer)")
             return
         except Exception:
             time.sleep(0.1)
@@ -200,7 +224,8 @@ def run_pool(slots: int, *, enable_train: bool = True) -> int:
     cmd = ["node", str(OVERNIGHT_BATCH), "--pool", "--slots", str(slots)]
     env = os.environ.copy()
     env.setdefault("COORDINATOR_URL", coordinator_url())
-    print(f"  >> {' '.join(cmd)}", flush=True)
+    _pool_log(f"\n--- pool start {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
+    _pool_print(f"  >> {' '.join(cmd)}")
 
     proc = subprocess.Popen(
         cmd,
@@ -247,7 +272,8 @@ def run_pool(slots: int, *, enable_train: bool = True) -> int:
             if enable_train:
                 m = pool_done_re.match(stripped)
                 if m:
-                    train_q.put(int(m.group(1)))
+                    gid = int(m.group(1))
+                    train_q.put(gid)
         rc = proc.wait()
     finally:
         train_stop.set()
@@ -260,8 +286,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--list", action="store_true", help="Show all matchups and game counts")
     ap.add_argument("--scoreboard", action="store_true", help="Print scoreboard and exit")
-    ap.add_argument("--parallel", type=int, default=PARALLEL_MATCHUPS,
-                    help=f"Independent game slots (default {PARALLEL_MATCHUPS})")
+    ap.add_argument("--parallel", type=int, default=None,
+                    help=f"Game slots (default {POOL_SLOTS_WITH_TRAIN} with train, "
+                    f"{POOL_SLOTS_MAX} with --no-train; max {POOL_SLOTS_MAX})")
     ap.add_argument("--batches", type=int, default=0,
                     help="(legacy) ignored in pool mode")
     ap.add_argument("--no-train", action="store_true",
@@ -275,15 +302,23 @@ def main():
     if not args.list and not args.scoreboard and not preflight_weights():
         sys.exit(1)
     if not args.list and not args.scoreboard:
+        from pool_preflight import main as pool_preflight_main
+
+        if pool_preflight_main() != 0:
+            sys.exit(1)
         try:
             stamp = assert_engine_ready(write_if_missing=True, parity=True)
-            print(f"  Engine stamp OK: {stamp['sha256'][:12]}  {BIN}")
+            _pool_print(f"  Engine stamp OK: {stamp['sha256'][:12]}  {BIN}")
         except Exception as e:
             print(f"ERROR: engine validation failed: {e}")
             sys.exit(1)
 
+    enable_train = not args.no_train
+    slots = pool_slots(train=enable_train, override=args.parallel)
+    os.environ["POOL_SLOTS"] = str(slots)
+
     if args.list:
-        print(f"\nELIGIBLE MATCHUPS  ({args.parallel} independent slots, 1 game at a time each)")
+        print(f"\nELIGIBLE MATCHUPS  ({slots} independent slots, 1 game at a time each)")
         print(f"{'#':<4} {'PAIRING':<40} {'GAMES':>6}  {'ROLE':<6} KIND")
         for i, (p, n, role) in enumerate(list_pairings(), 1):
             print(f"{i:<4} {p.label:<40} {n:>6}  {role:<6} {p.kind}")
@@ -291,30 +326,50 @@ def main():
         return
 
     if args.scoreboard:
+        from housekeeping import run_pool_housekeeping
+
+        for msg in run_pool_housekeeping(reset_pool_counter=False):
+            if msg.startswith("pruned"):
+                print(f"  housekeeping: {msg}")
         manifest = load_manifest()
         if not manifest.get("global_ratings"):
             manifest["global_ratings"] = compute_global_ratings(manifest.get("matchups", {}))
         print(format_scoreboard(manifest))
         return
 
-    print("=" * 64)
-    print("RANDOM OVERNIGHT TOURNAMENT  (continuous pool)")
-    print(f"  {args.parallel} independent slots — next pairing when each game finishes")
-    print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
-    print("  Ponder on; train=v15 vs Ka + ti-pure; bench=v15 vs JS ace-v13 anchor; max 1 Ka slot")
-    print("  Scoreboard + progress dock refresh after each finished game.")
+    POOL_STARTUP_LOG.write_text("", encoding="utf-8")
+    _pool_print("=" * 64)
+    _pool_print("RANDOM OVERNIGHT TOURNAMENT  (continuous pool)")
+    _pool_print(f"  {slots} game slots — next pairing when each game finishes")
+    if enable_train and slots < POOL_SLOTS_MAX:
+        _pool_print(f"  ({POOL_SLOTS_MAX - slots} slot reserved for eval-batch micro-train; use --parallel 8 or --no-train for full {POOL_SLOTS_MAX})")
+    _pool_print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
+    ka_cap = ", ".join(f"max {MAX_KA_PER_TC} ka@{tc}" for tc in KA_TIME_CONTROLS)
+    _pool_print(f"  Ponder on; Ka master queue — {ka_cap}")
+    _pool_print("  Reserved: 4x Ka (intuition/short/medium/long) + ti-pure@10s + v15 self@10s + frozen")
     if not args.no_train:
-        print(f"  Background NNUE: micro-train each game; gated deploy every {DEPLOY_EVERY_GAMES} trains")
-        print("  Promote if drift>2cp OR move>5% (and Elo ok). Log: training/data/nnue_train.log")
-        print("  Report: python training/plateau_probe.py --report")
-    else:
-        print("  Background NNUE: OFF (--no-train)")
-    print("=" * 64)
+        _pool_print(
+            f"  Background NNUE: micro-train; deploy every {DEPLOY_EVERY_GAMES} trains; "
+            "targets=WDL/self-play outcomes only"
+        )
+    _pool_print("=" * 64)
+    _pool_print(f"Live UI on this console — startup log: {POOL_STARTUP_LOG}")
 
-    start_coordinator()
+    from housekeeping import run_pool_housekeeping
+
+    for msg in run_pool_housekeeping(reset_pool_counter=True):
+        _pool_print(f"  housekeeping: {msg}")
+
+    manifest = load_manifest()
+    t = manifest.setdefault("tournament", {})
+    t["mode"] = "random-pool"
+    t["parallel"] = slots
+    save_manifest(manifest)
+
+    start_coordinator(slots=slots)
 
     try:
-        rc = run_pool(args.parallel, enable_train=not args.no_train)
+        rc = run_pool(slots, enable_train=enable_train)
         if rc != 0:
             print(f"pool exited {rc}", flush=True)
     except KeyboardInterrupt:
