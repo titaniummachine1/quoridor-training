@@ -54,6 +54,7 @@ training/data/nnue_learning_status.json
 training/data/supervisor_alert.json
 training/data/bisect_result.txt
 training/data/current_cert_changes.patch
+training/data/profiles/
 training/data/ka_bootstrap.err
 training/data/wallz_*
 training/data/zero_teacher/scrape/index*.js

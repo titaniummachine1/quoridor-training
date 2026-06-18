@@ -5,6 +5,26 @@
 Fine-tune the existing gen13 ACE HalfPW net. Do not retrain from scratch: tactical
 knowledge is already in the weights; new inputs are zero-init and learned as residuals.
 
+## Native search profiling
+
+`profile_titanium.ps1` builds a symbolized native release in the isolated
+`engine/target-profile` directory, then profiles start position, the c3h
+midgame, and a tested wall-maze replay. SVG output goes to the ignored
+`training/data/profiles/` directory and is summarized by
+`parse_flamegraph.py` using exclusive samples.
+
+Windows ETW collection requires an elevated shell; the repository and normal
+training do not. Right-click PowerShell, select **Run as administrator**, then:
+
+```powershell
+Set-Location "C:\gitProjects\Quoridor best AI"
+.\training\profile_titanium.ps1
+```
+
+Add `-IncludeScalar` to also profile the intentional non-BMI2/WASM-like build.
+If the Cargo plugin is absent, install it once with
+`cargo install flamegraph --locked`.
+
 ## Frozen Architecture (2026-06)
 
 | Component         | Contract                                                                                                                   |
