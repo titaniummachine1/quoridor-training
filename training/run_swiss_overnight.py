@@ -316,7 +316,12 @@ def main():
                     help="Disable background HalfPW NNUE training")
     ap.add_argument("--games", type=int, default=0,
                     help="Stop after this many game attempts (0 = continuous)")
+    ap.add_argument("--local-only", action="store_true",
+                    help="Use local ti-pure/self/frozen pairings; no remote opponents")
     args = ap.parse_args()
+
+    if args.local_only:
+        os.environ["POOL_LOCAL_ONLY"] = "1"
 
     if not BIN.exists():
         print(f"ERROR: build engine first: {BIN}")

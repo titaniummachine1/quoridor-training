@@ -111,6 +111,15 @@ Ka remains a remote full-game opponent only. Never feed Ka scalar evaluation
 labels into HalfPW; external MCTS attention belongs only in the separate
 search-pressure dataset.
 
+For unattended local-only volume with no remote engines:
+
+```powershell
+python training/run_swiss_overnight.py --local-only --parallel 2
+```
+
+Those slots use ti-pure@10s and v15 self-play@10s. Add `--games 20` for a
+bounded run. Two slots are the sensible laptop setting; more mostly buys heat.
+
 ## Checkpoint resume
 
 `run_nnue_cycle.py` always passes `--resume` to `train.py` for micro-trains. That is fine once you have at least one checkpoint stamped `halfpw-sparse-route5-ws14-v1`.

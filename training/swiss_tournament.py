@@ -218,8 +218,11 @@ def all_pairings() -> list[Pairing]:
 def eligible_pairings(manifest: dict | None = None) -> list[Pairing]:
     """Available pairings (skips unavailable remotes)."""
     avail = remote_availability()
+    local_only = os.environ.get("POOL_LOCAL_ONLY") == "1"
     out: list[Pairing] = []
     for pairing in all_pairings():
+        if local_only and pairing.kind == "remote":
+            continue
         if pairing.kind == "remote" and avail.get(pairing.engine_b) is False:
             continue
         out.append(pairing)
