@@ -14,12 +14,17 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Iterator
 
+try:
+    from move_codec import ace_to_algebraic, algebraic_to_ace
+except ModuleNotFoundError:
+    from training.move_codec import ace_to_algebraic, algebraic_to_ace
+
 DEFAULT_BASE = "https://quoridor-zero.ink"
 DEFAULT_MODEL = "resume-188/model_000159"
 
 START_STATE = {
     "currentPlayer": 0,
-    "player0Cell": 36,
+    "player0Cell": 4,
     "player1Cell": 76,
     "player0Walls": 10,
     "player1Walls": 10,
@@ -191,9 +196,28 @@ def ace_to_zero_move(ace: int) -> dict:
     return {"kind": "wall", "target": -1, "orientation": "vertical", "x": c, "y": 7 - r}
 
 
-def ace_moves_to_zero_state(moves: list[str]) -> dict:
-    from move_codec import algebraic_to_ace
+def zero_to_ace_move(move: dict) -> int:
+    if move["kind"] == "pawn":
+        row, col = divmod(int(move["target"]), 9)
+        return (8 - row) * 9 + col
+    x, y = int(move["x"]), int(move["y"])
+    slot = (7 - y) * 8 + x
+    return (100 if move["orientation"] == "horizontal" else 200) + slot
 
+
+def zero_move_text(move: dict) -> str:
+    return ace_to_algebraic(zero_to_ace_move(move))
+
+
+def zero_move_is_legal(snapshot: dict, move: dict) -> bool:
+    if move["kind"] == "pawn":
+        return int(move["target"]) in {int(v) for v in snapshot.get("legalPawnTargets", [])}
+    key = "legalVerticalWalls" if move["orientation"] == "vertical" else "legalHorizontalWalls"
+    wanted = (int(move["x"]), int(move["y"]))
+    return wanted in {(int(w["x"]), int(w["y"])) for w in snapshot.get(key, [])}
+
+
+def ace_moves_to_zero_state(moves: list[str]) -> dict:
     state = dict(START_STATE)
     for text in moves:
         state = apply_zero_move(state, ace_to_zero_move(algebraic_to_ace(text)))
@@ -243,9 +267,58 @@ def search_budget_features(search: dict, *, top_k: int = 8) -> dict:
 
 
 def search_pressure_from_zero(features: dict) -> float:
-    """Map MCTS visit attention to [-1,+1] leaf budget target (sidecar only)."""
-    concentration = min(1.0, float(features["top_visit_fraction"]) * 1.25)
-    expansion = min(1.0, max(0.0, float(features["prior_visit_gap"])) * 4.0)
-    volatility = min(1.0, float(features["visit_entropy"]) / 3.0)
-    instability = 0.45 * (1.0 - concentration) + 0.35 * expansion + 0.20 * volatility
-    return 2.0 * instability - 1.0
+    raise RuntimeError("single-search entropy pressure is retired; use paired_search_pressure")
+
+
+def _move_key(move: dict) -> str:
+    if move.get("kind") == "pawn":
+        return f"p:{int(move['target'])}"
+    return f"{move.get('orientation', '')[:1]}:{int(move['x'])}:{int(move['y'])}"
+
+
+def _visit_distribution(search: dict) -> dict[str, float]:
+    raw = {
+        _move_key(row.get("move") or {}): max(0.0, float(row.get("visitFraction", 0.0)))
+        for row in search.get("moves") or []
+    }
+    total = sum(raw.values())
+    return {k: v / total for k, v in raw.items()} if total > 0 else raw
+
+
+def _js_divergence(a: dict[str, float], b: dict[str, float]) -> float:
+    keys = set(a) | set(b)
+    total = 0.0
+    for key in keys:
+        x, y = a.get(key, 0.0), b.get(key, 0.0)
+        mid = 0.5 * (x + y)
+        if x > 0:
+            total += 0.5 * x * math.log(x / mid)
+        if y > 0:
+            total += 0.5 * y * math.log(y / mid)
+    return total
+
+
+def paired_search_pressure(shallow: dict, deep: dict) -> dict:
+    """Shallow/deep MCTS disagreement mapped to a conservative [-1,+1] target."""
+    shallow_moves = sorted(
+        shallow.get("moves") or [], key=lambda row: float(row.get("visitFraction", 0.0)), reverse=True
+    )
+    deep_moves = sorted(
+        deep.get("moves") or [], key=lambda row: float(row.get("visitFraction", 0.0)), reverse=True
+    )
+    shallow_best = _move_key(shallow_moves[0]["move"]) if shallow_moves else None
+    deep_best = _move_key(deep_moves[0]["move"]) if deep_moves else None
+    best_move_changed = bool(shallow_best and deep_best and shallow_best != deep_best)
+    jsd = _js_divergence(_visit_distribution(shallow), _visit_distribution(deep))
+    jsd_norm = min(1.0, jsd / math.log(2.0))
+    value_delta = abs(float(deep.get("rootValue", 0.0)) - float(shallow.get("rootValue", 0.0)))
+    value_delta_norm = min(1.0, value_delta / 0.5)
+    instability = 0.50 * float(best_move_changed) + 0.30 * jsd_norm + 0.20 * value_delta_norm
+    return {
+        "search_pressure": 2.0 * instability - 1.0,
+        "best_move_changed": best_move_changed,
+        "shallow_best": shallow_best,
+        "deep_best": deep_best,
+        "visit_js_divergence": jsd,
+        "root_value_delta": value_delta,
+    }

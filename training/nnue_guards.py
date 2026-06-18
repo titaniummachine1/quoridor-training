@@ -38,7 +38,7 @@ SOFT_CAP_BYTES = 500 * 1024 * 1024
 HARD_CAP_BYTES = 1024 * 1024 * 1024
 
 # HalfPW inference blob (leaf eval) — 11 field planes, ~552 KB weights.
-NET_WEIGHT_F64S = 16 + 32 + 32 + 9 * 128 * 32 + 81 * 32 * 2 + 81 * 32 * 11
+NET_WEIGHT_F64S = 16 + 32 + 32 + 9 * 128 * 32 + 81 * 32 * 2 + 81 * 5
 HALFPW_WEIGHT_BYTES = NET_WEIGHT_F64S * 8
 HALFPW_L3_BUDGET_BYTES = 576 * 1024  # target: entire net + accum fits typical L3
 MAIN_NET_SOFT_CAP_BYTES = SOFT_CAP_BYTES  # trainer checkpoints, not leaf weights

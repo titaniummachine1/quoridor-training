@@ -24,7 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from datagen import DB_PATH, insert_single_game, validate_game
+from datagen import DB_PATH, insert_single_game, insert_single_game_idempotent, validate_game
+from opponent_curriculum import claim_game, load_state as load_curriculum, record_result
 from manifest import format_scoreboard, format_scoreboard_compact, load_manifest, lookup_prior_wins, save_manifest, update_matchup
 from swiss_tournament import (
     KA_TIME_CONTROLS,
@@ -128,6 +129,7 @@ def _count_slots() -> dict:
     frozen = {tc: 0 for tc in OUR_TIME_CONTROLS}
     ti_pure_10s = 0
     self_10s = 0
+    zero = 0
     for tag in _active_slots.values():
         if tag.startswith("ka:"):
             ka[tag[3:]] = ka.get(tag[3:], 0) + 1
@@ -140,12 +142,15 @@ def _count_slots() -> dict:
             ti_pure_10s += 1
         elif tag == "self:10s":
             self_10s += 1
+        elif tag == "zero:adaptive":
+            zero += 1
     return {
         "ka": ka,
         "js": js,
         "frozen": frozen,
         "ti_pure_10s": ti_pure_10s,
         "self_10s": self_10s,
+        "zero": zero,
     }
 
 
@@ -162,6 +167,14 @@ def _claim_pairing() -> dict | None:
         return None
     game_id = uuid.uuid4().hex[:8]
     entry = pairing_game_entry(pairing, game_id, ROOT / "training" / "data")
+    if pairing.opponent_profile == "adaptive":
+        curriculum = claim_game(pairing.engine_b)
+        entry.update(curriculum)
+        entry["opponent_profile"] = "adaptive"
+        entry["source_tag"] = f"adaptive-{pairing.engine_b}"
+        entry["display_label"] = (
+            f"v15@5s vs {pairing.engine_b}@{curriculum['opponent_visits']}v"
+        )
     _active_slots[game_id] = pairing_slot_tag(pairing)
     if pairing.kind == "remote":
         _active_remotes[game_id] = pairing.tc_b
@@ -247,6 +260,7 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 "ka_per_tc_max": MAX_KA_PER_TC,
                 "ka_search_holders": dict(_ka_search_holders),
                 "max_remote_parallel": max_remote_parallel(),
+                "curriculum": load_curriculum(),
             })
             return
 
@@ -351,17 +365,46 @@ class CoordinatorHandler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": err})
                 return
             tag = body.get("tag") or body.get("source_tag") or ""
+            opponent = body.get("curriculum_opponent")
+            if opponent in ("ka", "zero") and not isinstance(body.get("our_win"), bool):
+                self._send_json(400, {"error": "adaptive game needs boolean our_win"})
+                return
 
             with _lock:
                 try:
-                    gid = insert_single_game(moves, outcome, DB_PATH, tag)
+                    request_id = str(body.get("game_id") or "")
+                    if request_id:
+                        gid, inserted = insert_single_game_idempotent(
+                            moves,
+                            outcome,
+                            request_id=request_id,
+                            out_path=DB_PATH,
+                            tag=tag,
+                        )
+                    else:
+                        gid = insert_single_game(moves, outcome, DB_PATH, tag)
+                        inserted = True
                 except ValueError as e:
                     self._send_json(400, {"error": str(e)})
                     return
                 if body.get("release_remote") or body.get("game_id"):
                     _release_game_slot(body.get("game_id"))
-                _record_game_done()
-            self._send_json(200, {"ok": True, "game_id": gid})
+                curriculum_update = None
+                if inserted and opponent in ("ka", "zero"):
+                    curriculum_update = record_result(
+                        opponent,
+                        our_win=body["our_win"],
+                        game_id=request_id,
+                        visits=int(body.get("opponent_visits") or 1),
+                    )
+                if inserted:
+                    _record_game_done()
+            self._send_json(200, {
+                "ok": True,
+                "game_id": gid,
+                "inserted": inserted,
+                "curriculum": curriculum_update,
+            })
             return
 
         self._send_json(404, {"error": "not found"})

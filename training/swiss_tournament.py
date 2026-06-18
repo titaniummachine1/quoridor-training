@@ -78,6 +78,8 @@ class Pairing:
     target_games: int = 0
     our_time: float = 5.0
     ponder_time: float | None = None
+    opponent_profile: str | None = None
+    opponent_visits: int | None = None
 
     def manifest_key(self) -> str:
         return matchup_key(self.engine_a, self.engine_b, self.tc_a, self.tc_b)
@@ -106,6 +108,10 @@ def pairing_game_entry(pairing: Pairing, game_id: str, _tournament_dir: Path) ->
         "game_id": game_id,
         "release_remote": True,
     }
+    if pairing.opponent_profile:
+        entry["opponent_profile"] = pairing.opponent_profile
+    if pairing.opponent_visits is not None:
+        entry["opponent_visits"] = pairing.opponent_visits
     return entry
 
 
@@ -189,23 +195,22 @@ def all_pairings() -> list[Pairing]:
         trainable=False,
     ))
 
-    def train_remote(opp: str, opp_time: str) -> None:
+    def train_adaptive(opp: str) -> None:
         p.append(Pairing(
             kind="remote",
             engine_a=CURRENT_ENGINE,
             engine_b=opp,
             tc_a="5s",
-            tc_b=opp_time,
-            label=f"v15-vs-{opp}-{opp_time}",
+            tc_b="adaptive",
+            label=f"v15-vs-{opp}-adaptive",
             trainable=True,
             our_time=0,
             ponder_time=0,
+            opponent_profile="adaptive",
         ))
 
-    train_remote("ka", "intuition")
-    train_remote("ka", "short")
-    train_remote("ka", "medium")
-    train_remote("ka", "long")
+    train_adaptive("ka")
+    train_adaptive("zero")
 
     return p
 
@@ -228,10 +233,11 @@ def _games_played(manifest: dict, pairing: Pairing) -> int:
 
 ANCHOR_BENCH_RATE = 0.08  # legacy (JS no longer random — 1 slot reserved)
 FROZEN_BENCH_RATE = float(os.environ.get("FROZEN_BENCH_RATE", "0.28"))  # legacy alias
-KA_TIME_CONTROLS = ("intuition", "short", "medium", "long")
+KA_TIME_CONTROLS = ("adaptive",)
 MAX_KA_PER_TC = int(os.environ.get("MAX_KA_PER_TC", "1"))
 OUR_TIME_CONTROLS = ("5s", "10s")
-RESERVED_KA_SLOTS = len(KA_TIME_CONTROLS)  # 4
+RESERVED_KA_SLOTS = len(KA_TIME_CONTROLS)
+RESERVED_ZERO_SLOTS = 1
 RESERVED_TI_PURE_10S = 1
 RESERVED_SELF_10S = 1
 RESERVED_FROZEN_5S = 1
@@ -241,6 +247,8 @@ def pairing_slot_tag(pairing: Pairing) -> str:
     """Coordinator slot bucket for reserved pool layout."""
     if pairing.kind == "remote" and pairing.engine_b == "ka":
         return f"ka:{pairing.tc_b}"
+    if pairing.kind == "remote" and pairing.engine_b == "zero":
+        return "zero:adaptive"
     if pairing.engine_b == "ace-v13":
         return "js"
     if pairing.engine_b == FROZEN_ENGINE:
@@ -267,7 +275,7 @@ def pick_one_pairing(
     allow_ka_long: bool = True,  # legacy
     ka_tc_free: dict[str, bool] | None = None,  # legacy
 ) -> Pairing | None:
-    """Reserved 7-slot layout: 4 Ka + ti-pure@10s + self@10s + frozen@5s."""
+    """Adaptive Ka + zero-ink, ti-pure@10s, self@10s, and frozen@5s."""
     manifest = manifest or load_manifest()
     pool = eligible_pairings(manifest)
 
@@ -275,10 +283,17 @@ def pick_one_pairing(
     frozen_inf = (slot_counts or {}).get("frozen") or {tc: 0 for tc in OUR_TIME_CONTROLS}
     ti_pure_inf = int((slot_counts or {}).get("ti_pure_10s", 0))
     self_inf = int((slot_counts or {}).get("self_10s", 0))
+    zero_inf = int((slot_counts or {}).get("zero", 0))
 
     def pick_ka(tc: str) -> Pairing | None:
         for p in pool:
             if p.kind == "remote" and p.engine_b == "ka" and p.tc_b == tc:
+                return p
+        return None
+
+    def pick_zero() -> Pairing | None:
+        for p in pool:
+            if p.kind == "remote" and p.engine_b == "zero":
                 return p
         return None
 
@@ -306,6 +321,10 @@ def pick_one_pairing(
                 p = pick_ka(tc)
                 if p:
                     return p
+        if zero_inf < RESERVED_ZERO_SLOTS:
+            p = pick_zero()
+            if p:
+                return p
 
     if ti_pure_inf < RESERVED_TI_PURE_10S:
         p = pick_ti_pure_10s()

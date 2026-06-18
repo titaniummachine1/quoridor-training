@@ -52,13 +52,68 @@ def rec_field(rec: dict, canonical_key: str) -> list:
             return val
     return []
 
-# Weight blob plane order (must match acev13/net.rs load order)
+# Compact sparse route features consumed by the network. The larger fields
+# above remain the engine's analysis/data format and are reduced to these masks
+# only when a position is expanded for training.
+ROUTE_ME = "route_me"
+ROUTE_OPP = "route_opp"
+ROUTE_NEAR_ME = "route_near_me"
+ROUTE_NEAR_OPP = "route_near_opp"
+ROUTE_CONTESTED = "route_contested"
+ROUTE_P0_FIELD = "route_p0_field"
+ROUTE_P1_FIELD = "route_p1_field"
+ROUTE_FLANK_P0_FIELD = "route_flank_p0_field"
+ROUTE_FLANK_P1_FIELD = "route_flank_p1_field"
+
+# Weight blob plane order (must match acev13/net.rs load order).
 WEIGHT_PLANE_ORDER = (
-    "goal_inv_p0", "goal_inv_p1",
-    "pawn_fwd_p0", "pawn_fwd_p1",
-    "corridor_delta_p0", "corridor_delta_p1",
-    "path_cross_p0", "path_cross_p1",
-    "choke_p0", "choke_p1",
-    "contested",
+    ROUTE_ME,
+    ROUTE_OPP,
+    ROUTE_NEAR_ME,
+    ROUTE_NEAR_OPP,
+    ROUTE_CONTESTED,
 )
 FIELD_PLANE_COUNT = len(WEIGHT_PLANE_ORDER)
+
+
+def compact_route_vectors(rec: dict, mirc: list[int]) -> tuple[list[float], ...]:
+    """Canonical sparse masks derived from exact forward/goal distance fields."""
+    goal0 = rec_field(rec, GOAL_INV_P0)
+    goal1 = rec_field(rec, GOAL_INV_P1)
+    from0 = rec_field(rec, PAWN_FWD_P0)
+    from1 = rec_field(rec, PAWN_FWD_P1)
+    if not all(len(v) == 81 for v in (goal0, goal1, from0, from1)):
+        raise KeyError("compact route inputs require both 81-cell goal and pawn fields")
+    route0_raw = rec.get(ROUTE_P0_FIELD)
+    route1_raw = rec.get(ROUTE_P1_FIELD)
+    near0_raw = rec.get(ROUTE_FLANK_P0_FIELD)
+    near1_raw = rec.get(ROUTE_FLANK_P1_FIELD)
+    if all(v and len(v) == 81 for v in (route0_raw, route1_raw, near0_raw, near1_raw)):
+        route0 = [float(v) for v in route0_raw]
+        route1 = [float(v) for v in route1_raw]
+        near0 = [float(v) for v in near0_raw]
+        near1 = [float(v) for v in near1_raw]
+    else:
+        shortest0 = goal0[rec["pawn0"]]
+        shortest1 = goal1[rec["pawn1"]]
+        route0 = [0.0] * 81
+        near0 = [0.0] * 81
+        route1 = [0.0] * 81
+        near1 = [0.0] * 81
+        for i in range(81):
+            t0 = from0[i] + goal0[i]
+            t1 = from1[i] + goal1[i]
+            route0[i] = float(t0 == shortest0)
+            near0[i] = float(t0 == shortest0 + 2)
+            route1[i] = float(t1 == shortest1)
+            near1[i] = float(t1 == shortest1 + 2)
+
+    if rec["turn"] == 0:
+        me, opp, near_me, near_opp = route0, route1, near0, near1
+    else:
+        me = [route1[mirc[i]] for i in range(81)]
+        opp = [route0[mirc[i]] for i in range(81)]
+        near_me = [near1[mirc[i]] for i in range(81)]
+        near_opp = [near0[mirc[i]] for i in range(81)]
+    contested = [float((me[i] or near_me[i]) and (opp[i] or near_opp[i])) for i in range(81)]
+    return me, opp, near_me, near_opp, contested

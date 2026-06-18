@@ -32,7 +32,7 @@ BASELINE_ENGINE = ANCHOR_ENGINE
 # Bare "titanium" = legacy GameSearchSession (MCTS), NOT v15 or ace-v13 — exclude from ladder.
 DEPRECATED_LADDER_ENGINES = frozenset({"titanium", "titanium-cert", "titanium-plain"})
 ANCHOR_ENTITY = f"{ANCHOR_ENGINE}@5s"
-REMOTE_ENGINES = frozenset({"ka", "ishtar"})
+REMOTE_ENGINES = frozenset({"ka", "ishtar", "zero"})
 # Site UI labels for Ka/Ishtar time presets (strength fixed at Alpha on wire).
 REMOTE_TIME_LABELS = {
     "intuition": "Immediate",
@@ -40,6 +40,7 @@ REMOTE_TIME_LABELS = {
     "short": "Short",
     "medium": "Medium",
     "long": "Long",
+    "adaptive": "Adaptive",
 }
 # ti-pure @ 5s pinned as ladder reference.
 ANCHOR_RATING = 1200.0
@@ -86,7 +87,8 @@ def engine_display_short(engine: str, tc: str | None = None) -> str:
         return f"ti-pure@{tc}"
     if engine in REMOTE_ENGINES:
         ui = REMOTE_TIME_LABELS.get(tc, tc)
-        return f"Ka-{ui}"
+        name = {"ka": "Ka", "ishtar": "Ishtar", "zero": "zero"}[engine]
+        return f"{name}-{ui}"
     return f"{engine}@{tc}"
 
 
@@ -97,7 +99,8 @@ def display_entity(ent: str) -> str:
     base, tc = ent.split("@", 1)
     if base in REMOTE_ENGINES:
         ui = REMOTE_TIME_LABELS.get(tc, tc)
-        return f"Ka@{tc} ({ui} @ Alpha)"
+        name = {"ka": "Ka", "ishtar": "Ishtar", "zero": "zero"}[base]
+        return f"{name}@{tc} ({ui})"
     if base == ANCHOR_ENGINE:
         return f"ti-pure@{tc} (Rust ref)"
     if base == "ace-v13":
@@ -522,6 +525,9 @@ def format_scoreboard_compact(manifest: dict) -> str:
         if eb == "ka":
             label = "Ka-imm" if tc_b == "intuition" else f"Ka-{tc_b}"
             ent = f"ka@{tc_b}"
+        elif eb == "zero":
+            label = f"zero-{tc_b}"
+            ent = f"zero@{tc_b}"
         elif eb == "ace-v13":
             label = f"JS-v13@{tc_a}"
             ent = entity_label("ace-v13", tc_a)

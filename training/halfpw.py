@@ -23,6 +23,12 @@ from field_planes import (
     PATH_CROSS_P1,
     PAWN_FWD_P0,
     PAWN_FWD_P1,
+    ROUTE_CONTESTED,
+    ROUTE_ME,
+    ROUTE_NEAR_ME,
+    ROUTE_NEAR_OPP,
+    ROUTE_OPP,
+    compact_route_vectors,
     rec_field,
 )
 
@@ -31,7 +37,7 @@ WSKIP_LEN = 16
 W1C_LEN = 9 * 128 * NET_H
 PO_LEN = 81 * NET_H
 PX_LEN = 81 * NET_H
-FIELD_LEN = 81 * NET_H
+FIELD_LEN = 81
 NET_WEIGHT_F64S = WSKIP_LEN + NET_H + NET_H + W1C_LEN + PO_LEN + PX_LEN + FIELD_LEN * FIELD_PLANE_COUNT
 
 NET_MIRC = [(8 - i // 9) * 9 + i % 9 for i in range(81)]
@@ -65,17 +71,11 @@ class Net:
     w1c: list
     po: list
     px: list
-    goal_inv_p0: list
-    goal_inv_p1: list
-    pawn_fwd_p0: list
-    pawn_fwd_p1: list
-    corridor_delta_p0: list
-    corridor_delta_p1: list
-    path_cross_p0: list
-    path_cross_p1: list
-    choke_p0: list
-    choke_p1: list
-    contested: list
+    route_me: list
+    route_opp: list
+    route_near_me: list
+    route_near_opp: list
+    route_contested: list
 
     @staticmethod
     def load(path):
@@ -97,8 +97,7 @@ class Net:
             take(WSKIP_LEN), take(NET_H), take(NET_H),
             take(W1C_LEN), take(PO_LEN), take(PX_LEN),
             take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
-            take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
-            take(FIELD_LEN), take(FIELD_LEN), take(FIELD_LEN),
+            take(FIELD_LEN),
         )
 
 
@@ -137,37 +136,16 @@ def _contested_vec(delta0_raw, delta1_raw, contested_raw) -> list[float]:
     return out
 
 
-def _field_plane_contrib(net: Net, hid: list[float], rec: dict) -> None:
-    g0 = rec_field(rec, GOAL_INV_P0)
-    g1 = rec_field(rec, GOAL_INV_P1)
-    p0 = rec_field(rec, PAWN_FWD_P0)
-    p1 = rec_field(rec, PAWN_FWD_P1)
-    d0 = rec_field(rec, CORRIDOR_DELTA_P0)
-    d1 = rec_field(rec, CORRIDOR_DELTA_P1)
-    c0 = rec_field(rec, PATH_CROSS_P0)
-    c1 = rec_field(rec, PATH_CROSS_P1)
-    k0 = rec_field(rec, CHOKE_P0)
-    k1 = rec_field(rec, CHOKE_P1)
-    ct = rec_field(rec, CONTESTED)
-    gf0, pf0, df0, cf0, ch0 = _cell_feats(g0, p0, d0, c0, k0)
-    gf1, pf1, df1, cf1, ch1 = _cell_feats(g1, p1, d1, c1, k1)
-    contested = _contested_vec(d0, d1, ct)
-    for i in range(81):
-        base = i * NET_H
-        for j in range(NET_H):
-            hid[j] += (
-                net.goal_inv_p0[base + j] * gf0[i]
-                + net.pawn_fwd_p0[base + j] * pf0[i]
-                + net.corridor_delta_p0[base + j] * df0[i]
-                + net.path_cross_p0[base + j] * cf0[i]
-                + net.choke_p0[base + j] * ch0[i]
-                + net.goal_inv_p1[base + j] * gf1[i]
-                + net.pawn_fwd_p1[base + j] * pf1[i]
-                + net.corridor_delta_p1[base + j] * df1[i]
-                + net.path_cross_p1[base + j] * cf1[i]
-                + net.choke_p1[base + j] * ch1[i]
-                + net.contested[base + j] * contested[i]
-            )
+def _route_score(net: Net, rec: dict) -> float:
+    route_me, route_opp, near_me, near_opp, contested = compact_route_vectors(rec, NET_MIRC)
+    return sum(
+        net.route_me[i] * route_me[i]
+        + net.route_opp[i] * route_opp[i]
+        + net.route_near_me[i] * near_me[i]
+        + net.route_near_opp[i] * near_opp[i]
+        + net.route_contested[i] * contested[i]
+        for i in range(81)
+    )
 
 
 def forward(net, rec):
@@ -206,6 +184,7 @@ def forward(net, rec):
     d_opp_i = int(d_opp)
     out += ws[14] * legal_wall_norm(rec)
     out += ws[15] * opponent_corridor_width(rec, me, d_me_i, d_opp_i)
+    out += _route_score(net, rec)
 
     pawn0, pawn1 = rec["pawn0"], rec["pawn1"]
     hw, vw = rec["hw"], rec["vw"]
@@ -243,8 +222,6 @@ def forward(net, rec):
         px1 = NET_MIRC[pawn0] * NET_H
         for j in range(NET_H):
             hid[j] = net.b1[j] + acc[j] + net.po[po0 + j] + net.px[px1 + j]
-
-    _field_plane_contrib(net, hid, rec)
 
     for j in range(NET_H):
         a2 = min(1.0, max(0.0, hid[j]))

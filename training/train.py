@@ -56,6 +56,12 @@ from field_planes import (
     PATH_CROSS_P1,
     PAWN_FWD_P0,
     PAWN_FWD_P1,
+    ROUTE_CONTESTED,
+    ROUTE_ME,
+    ROUTE_NEAR_ME,
+    ROUTE_NEAR_OPP,
+    ROUTE_OPP,
+    compact_route_vectors,
     rec_field,
 )
 from engine_identity import assert_engine_ready
@@ -67,7 +73,7 @@ WSKIP_LEN = 16
 W1C_SHAPE = (9, 128, NET_H)   # pawn buckets × wall slots × hidden
 PO_SHAPE  = (81, NET_H)
 PX_SHAPE  = (81, NET_H)
-FIELD_SHAPE = (81, NET_H)
+FIELD_SHAPE = (81,)
 NET_WEIGHT_F64S = (
     WSKIP_LEN + NET_H + NET_H
     + math.prod(W1C_SHAPE) + math.prod(PO_SHAPE) + math.prod(PX_SHAPE)
@@ -80,7 +86,7 @@ NET_BKT  = [(i // 9 // 3) * 3 + (i % 9) // 3 for i in range(81)]
 
 ROOT    = Path(__file__).resolve().parent.parent
 WEIGHTS = ROOT / "engine" / "src" / "acev13" / "net_weights.bin"
-TRAINING_SCHEMA = "halfpw-field11-ws14-legal-wall-v1"
+TRAINING_SCHEMA = "halfpw-sparse-route5-ws14-v1"
 
 # ── model ─────────────────────────────────────────────────────────────────────
 
@@ -104,17 +110,11 @@ class HalfPW(nn.Module):
         self.w1c = nn.Parameter(torch.tensor(take(math.prod(W1C_SHAPE)), dtype=torch.float32).view(*W1C_SHAPE))
         self.po  = nn.Parameter(torch.tensor(take(math.prod(PO_SHAPE)),  dtype=torch.float32).view(*PO_SHAPE))
         self.px  = nn.Parameter(torch.tensor(take(math.prod(PX_SHAPE)),  dtype=torch.float32).view(*PX_SHAPE))
-        self.goal_inv_p0 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.goal_inv_p1 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.pawn_fwd_p0 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.pawn_fwd_p1 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.corridor_delta_p0 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.corridor_delta_p1 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.path_cross_p0 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.path_cross_p1 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.choke_p0 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.choke_p1 = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
-        self.contested = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
+        self.route_me = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
+        self.route_opp = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
+        self.route_near_me = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
+        self.route_near_opp = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
+        self.route_contested = nn.Parameter(torch.tensor(take(math.prod(FIELD_SHAPE)), dtype=torch.float32).view(*FIELD_SHAPE))
 
     def hidden_features(self, b):
         """Frozen leaf representation before value projection; useful for sidecar heads."""
@@ -126,17 +126,6 @@ class HalfPW(nn.Module):
         w1c_sel = self.w1c[bucket]
         acc     = (w1c_sel * wall_mask.unsqueeze(-1)).sum(dim=1)
         hid     = self.b1 + acc + self.po[pawn_me] + self.px[pawn_opp]
-        hid = hid + (b[GOAL_INV_P0].float().unsqueeze(-1) * self.goal_inv_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PAWN_FWD_P0].float().unsqueeze(-1) * self.pawn_fwd_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CORRIDOR_DELTA_P0].float().unsqueeze(-1) * self.corridor_delta_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PATH_CROSS_P0].float().unsqueeze(-1) * self.path_cross_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[GOAL_INV_P1].float().unsqueeze(-1) * self.goal_inv_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PAWN_FWD_P1].float().unsqueeze(-1) * self.pawn_fwd_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CORRIDOR_DELTA_P1].float().unsqueeze(-1) * self.corridor_delta_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PATH_CROSS_P1].float().unsqueeze(-1) * self.path_cross_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CHOKE_P0].float().unsqueeze(-1) * self.choke_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CHOKE_P1].float().unsqueeze(-1) * self.choke_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CONTESTED].float().unsqueeze(-1) * self.contested.unsqueeze(0)).sum(dim=1)
         return hid.clamp(0.0, 1.0)
 
     def forward(self, b):
@@ -177,6 +166,11 @@ class HalfPW(nn.Module):
         out = out + ws[13] * pd * w_opp / 10.0
         out = out + ws[14] * b["legal_wall_norm"].float()
         out = out + ws[15] * b["width_opp"].float()
+        out = out + (b[ROUTE_ME] * self.route_me).sum(dim=1)
+        out = out + (b[ROUTE_OPP] * self.route_opp).sum(dim=1)
+        out = out + (b[ROUTE_NEAR_ME] * self.route_near_me).sum(dim=1)
+        out = out + (b[ROUTE_NEAR_OPP] * self.route_near_opp).sum(dim=1)
+        out = out + (b[ROUTE_CONTESTED] * self.route_contested).sum(dim=1)
 
         # Neural hidden layer
         bucket     = b["bucket"]        # [N]
@@ -187,17 +181,6 @@ class HalfPW(nn.Module):
         w1c_sel = self.w1c[bucket]                              # [N, 128, H]
         acc     = (w1c_sel * wall_mask.unsqueeze(-1)).sum(dim=1) # [N, H]
         hid     = self.b1 + acc + self.po[pawn_me] + self.px[pawn_opp]  # [N, H]
-        hid = hid + (b[GOAL_INV_P0].float().unsqueeze(-1) * self.goal_inv_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PAWN_FWD_P0].float().unsqueeze(-1) * self.pawn_fwd_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CORRIDOR_DELTA_P0].float().unsqueeze(-1) * self.corridor_delta_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PATH_CROSS_P0].float().unsqueeze(-1) * self.path_cross_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[GOAL_INV_P1].float().unsqueeze(-1) * self.goal_inv_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PAWN_FWD_P1].float().unsqueeze(-1) * self.pawn_fwd_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CORRIDOR_DELTA_P1].float().unsqueeze(-1) * self.corridor_delta_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[PATH_CROSS_P1].float().unsqueeze(-1) * self.path_cross_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CHOKE_P0].float().unsqueeze(-1) * self.choke_p0.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CHOKE_P1].float().unsqueeze(-1) * self.choke_p1.unsqueeze(0)).sum(dim=1)
-        hid = hid + (b[CONTESTED].float().unsqueeze(-1) * self.contested.unsqueeze(0)).sum(dim=1)
         hid_act = hid.clamp(0.0, 1.0)                          # clipped ReLU
         out     = out + (self.w2 * hid_act * 200.0).sum(dim=-1)
 
@@ -211,11 +194,8 @@ class HalfPW(nn.Module):
                 f.write(struct.pack(f"<{len(vals)}d", *vals))
             w(self.ws);   w(self.b1);  w(self.w2)
             w(self.w1c);  w(self.po);  w(self.px)
-            w(self.goal_inv_p0); w(self.goal_inv_p1)
-            w(self.pawn_fwd_p0); w(self.pawn_fwd_p1)
-            w(self.corridor_delta_p0); w(self.corridor_delta_p1)
-            w(self.path_cross_p0); w(self.path_cross_p1)
-            w(self.choke_p0); w(self.choke_p1); w(self.contested)
+            w(self.route_me); w(self.route_opp)
+            w(self.route_near_me); w(self.route_near_opp); w(self.route_contested)
         print(f"  weights saved -> {path}")
 
 
@@ -248,49 +228,9 @@ class QuoridorDataset(Dataset):
             )
         legal_wall_norm = r["legal_wall_count"] / 128.0
 
-        def field_vec(goal_raw, player_raw, delta_raw, cross_raw, choke_raw):
-            goal = [0.0] * 81
-            player = [0.0] * 81
-            delta = [0.0] * 81
-            cross = [0.0] * 81
-            choke = [0.0] * 81
-            for i in range(81):
-                dg = goal_raw[i] if i < len(goal_raw) else 255
-                if dg == 255:
-                    continue
-                goal[i] = dg / 16.0
-                ps = player_raw[i] if i < len(player_raw) else 255
-                if ps != 255:
-                    player[i] = ps / 16.0
-                dt = delta_raw[i] if i < len(delta_raw) else 255
-                if dt != 255:
-                    delta[i] = dt / 16.0
-                cv = cross_raw[i] if i < len(cross_raw) else 0
-                if cv:
-                    cross[i] = cv / 16.0
-                kv = choke_raw[i] if i < len(choke_raw) else 0
-                choke[i] = kv / 16.0 if kv else 0.0
-            return goal, player, delta, cross, choke
-
-        raw_d0 = rec_field(r, CORRIDOR_DELTA_P0)
-        raw_d1 = rec_field(r, CORRIDOR_DELTA_P1)
-        g0, p0, d0, c0, k0 = field_vec(
-            rec_field(r, GOAL_INV_P0), rec_field(r, PAWN_FWD_P0),
-            raw_d0, rec_field(r, PATH_CROSS_P0), rec_field(r, CHOKE_P0),
+        route_me, route_opp, route_near_me, route_near_opp, route_contested = (
+            compact_route_vectors(r, NET_MIRC)
         )
-        g1, p1, d1, c1, k1 = field_vec(
-            rec_field(r, GOAL_INV_P1), rec_field(r, PAWN_FWD_P1),
-            raw_d1, rec_field(r, PATH_CROSS_P1), rec_field(r, CHOKE_P1),
-        )
-        contested_raw = rec_field(r, CONTESTED)
-        contested = []
-        for i in range(81):
-            if contested_raw and i < len(contested_raw) and contested_raw[i]:
-                contested.append(contested_raw[i] / 16.0)
-            else:
-                d0v = raw_d0[i] if i < len(raw_d0) else 255
-                d1v = raw_d1[i] if i < len(raw_d1) else 255
-                contested.append(encode_contested(d0v, d1v))
 
         # Wall accumulator inputs (mirror when me=1 to share weights)
         hw = r["hw"];  vw = r["vw"]
@@ -319,17 +259,11 @@ class QuoridorDataset(Dataset):
             "w_opp":     torch.tensor(w_opp,       dtype=torch.float32),
             "legal_wall_norm": torch.tensor(legal_wall_norm, dtype=torch.float32),
             "width_opp": torch.tensor(width_opp,   dtype=torch.float32),
-            GOAL_INV_P0: torch.tensor(g0, dtype=torch.float32),
-            PAWN_FWD_P0: torch.tensor(p0, dtype=torch.float32),
-            CORRIDOR_DELTA_P0: torch.tensor(d0, dtype=torch.float32),
-            PATH_CROSS_P0: torch.tensor(c0, dtype=torch.float32),
-            CHOKE_P0: torch.tensor(k0, dtype=torch.float32),
-            GOAL_INV_P1: torch.tensor(g1, dtype=torch.float32),
-            PAWN_FWD_P1: torch.tensor(p1, dtype=torch.float32),
-            CORRIDOR_DELTA_P1: torch.tensor(d1, dtype=torch.float32),
-            PATH_CROSS_P1: torch.tensor(c1, dtype=torch.float32),
-            CHOKE_P1: torch.tensor(k1, dtype=torch.float32),
-            CONTESTED: torch.tensor(contested, dtype=torch.float32),
+            ROUTE_ME: torch.tensor(route_me, dtype=torch.float32),
+            ROUTE_OPP: torch.tensor(route_opp, dtype=torch.float32),
+            ROUTE_NEAR_ME: torch.tensor(route_near_me, dtype=torch.float32),
+            ROUTE_NEAR_OPP: torch.tensor(route_near_opp, dtype=torch.float32),
+            ROUTE_CONTESTED: torch.tensor(route_contested, dtype=torch.float32),
             "bucket":    torch.tensor(bucket,      dtype=torch.long),
             "wall_mask": torch.tensor(wall_mask,   dtype=torch.float32),
             "pawn_me":   torch.tensor(pawn_me_idx, dtype=torch.long),

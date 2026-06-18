@@ -346,7 +346,7 @@ def main():
     _pool_print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
     ka_cap = ", ".join(f"max {MAX_KA_PER_TC} ka@{tc}" for tc in KA_TIME_CONTROLS)
     _pool_print(f"  Ponder on; Ka master queue — {ka_cap}")
-    _pool_print("  Reserved: 4x Ka (intuition/short/medium/long) + ti-pure@10s + v15 self@10s + frozen")
+    _pool_print("  Reserved: adaptive Ka + adaptive zero-ink + ti-pure@10s + v15 self@10s + frozen")
     if not args.no_train:
         _pool_print(
             f"  Background NNUE: micro-train; deploy every {DEPLOY_EVERY_GAMES} trains; "

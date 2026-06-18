@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import hashlib
 import random
 import sys
 from pathlib import Path
@@ -28,7 +29,8 @@ from zero_teacher.client import (  # noqa: E402
     ace_moves_to_zero_state,
     apply_zero_move,
     search_budget_features,
-    search_pressure_from_zero,
+    paired_search_pressure,
+    zero_move_text,
 )
 from zero_teacher.paths import DEFAULT_LABELS  # noqa: E402
 
@@ -57,17 +59,18 @@ def sample_db_prefixes(
     max_ply: int,
     seed: int,
     skip: set[str],
-) -> list[tuple[list[str], int, str, str]]:
+) -> list[tuple[list[str], int, str, str, str]]:
     rng = random.Random(seed)
     games = load_games_from_db(DB_PATH)
-    candidates: list[tuple[list[str], int, str, str]] = []
+    candidates: list[tuple[list[str], int, str, str, str]] = []
     for moves, outcome, src in games:
         hi = min(max_ply, len(moves))
         for ply in range(min_ply, hi + 1):
             prefix = moves[:ply]
             key = base64.b64encode(pack_moves(prefix)).decode("ascii")
             if key not in skip:
-                candidates.append((prefix, outcome, src, key))
+                game_key = hashlib.sha256(pack_moves(moves)).hexdigest()[:20]
+                candidates.append((prefix, outcome, src, key, game_key))
     rng.shuffle(candidates)
     return candidates[:limit]
 
@@ -76,33 +79,59 @@ def _row(
     *,
     key: str,
     moves: list[str],
-    outcome: int,
+    outcome: int | None,
     src: str,
     settings: ZeroSettings,
     feat: dict,
     chunks: list[dict],
     pressure: float,
+    paired: dict,
+    source_game_key: str,
+    shallow_feat: dict,
+    shallow_settings: ZeroSettings,
 ) -> dict:
-    return {
-        "schema": "zero-search-budget-v1",
+    row = {
+        "schema": "zero-search-budget-v2",
         "teacher": "quoridor-zero.ink",
         "moves_bin": key,
         "moves": moves,
-        "outcome": outcome,
         "src": src,
+        "source_game_key": source_game_key,
         "ply": len(moves),
-        "settings": settings.as_dict(),
+        "settings": {
+            "shallow": shallow_settings.as_dict(),
+            "deep": settings.as_dict(),
+        },
         "search": {
-            "root_value": feat["root_value"],
-            "total_visits": feat["total_visits"],
-            "top_visit_fraction": feat["top_visit_fraction"],
-            "visit_entropy": feat["visit_entropy"],
-            "prior_visit_gap": feat["prior_visit_gap"],
-            "top_moves": feat["top_moves"],
+            "shallow": shallow_feat,
+            "deep": feat,
+            "disagreement": {k: v for k, v in paired.items() if k != "search_pressure"},
         },
         "stream_last": chunks[-1] if chunks else None,
         "search_pressure": pressure,
     }
+    if outcome in (-1, 1):
+        row["outcome"] = outcome
+    return row
+
+
+def select_budget_chunks(chunks: list[dict], shallow_visits: int, deep_visits: int) -> tuple[dict, dict]:
+    usable = [chunk for chunk in chunks if chunk.get("moves")]
+    if not usable:
+        raise RuntimeError("continuous search returned no move tables")
+
+    def at_budget(target: int) -> dict:
+        reached = [chunk for chunk in usable if int(chunk.get("totalVisits", 0)) >= target]
+        return min(reached, key=lambda chunk: int(chunk.get("totalVisits", 0))) if reached else usable[-1]
+
+    shallow = at_budget(shallow_visits)
+    deep = at_budget(deep_visits)
+    if int(deep.get("totalVisits", 0)) <= int(shallow.get("totalVisits", 0)):
+        raise RuntimeError(
+            f"continuous stream did not separate budgets: "
+            f"{shallow.get('totalVisits')} vs {deep.get('totalVisits')}"
+        )
+    return shallow, deep
 
 
 def collect_from_db(client: ZeroTeacherClient, args, out_path: Path) -> int:
@@ -114,22 +143,27 @@ def collect_from_db(client: ZeroTeacherClient, args, out_path: Path) -> int:
         seed=args.seed,
         skip=skip,
     )
-    settings = ZeroSettings(visits=args.visits, threads=args.threads)
+    settings = ZeroSettings(visits=args.deep_visits, threads=args.threads)
+    shallow_settings = ZeroSettings(visits=args.shallow_visits, threads=args.threads)
     written = 0
     with out_path.open("a", encoding="utf-8") as f:
-        for i, (moves, outcome, src, key) in enumerate(prefixes, 1):
+        for i, (moves, outcome, src, key, game_key) in enumerate(prefixes, 1):
             try:
                 state = ace_moves_to_zero_state(moves)
                 client.position(state)
-                search = client.search(state, settings)
-                chunks = list(
-                    client.continuous(state, settings, max_chunks=args.stream_chunks)
+                chunks = list(client.continuous(
+                    state, settings, max_chunks=args.stream_chunks or None
+                ))
+                shallow, search = select_budget_chunks(
+                    chunks, args.shallow_visits, args.deep_visits
                 )
             except Exception as e:
                 print(f"skip {i}/{len(prefixes)} ply={len(moves)}: {e}", file=sys.stderr)
                 continue
             feat = search_budget_features(search, top_k=args.top_k)
-            pressure = search_pressure_from_zero(feat)
+            shallow_feat = search_budget_features(shallow, top_k=args.top_k)
+            paired = paired_search_pressure(shallow, search)
+            pressure = paired["search_pressure"]
             f.write(
                 json.dumps(
                     _row(
@@ -141,6 +175,10 @@ def collect_from_db(client: ZeroTeacherClient, args, out_path: Path) -> int:
                         feat=feat,
                         chunks=chunks,
                         pressure=pressure,
+                        paired=paired,
+                        source_game_key=game_key,
+                        shallow_feat=shallow_feat,
+                        shallow_settings=shallow_settings,
                     ),
                     separators=(",", ":"),
                 )
@@ -157,30 +195,39 @@ def collect_from_db(client: ZeroTeacherClient, args, out_path: Path) -> int:
 
 
 def collect_from_bot(client: ZeroTeacherClient, args, out_path: Path) -> int:
-    settings = ZeroSettings(visits=args.visits, threads=args.threads)
+    settings = ZeroSettings(visits=args.deep_visits, threads=args.threads)
+    shallow_settings = ZeroSettings(visits=args.shallow_visits, threads=args.threads)
     state = dict(START_STATE)
     moves: list[str] = []
     written = 0
     with out_path.open("a", encoding="utf-8") as f:
         for _ in range(1, args.bot_plies + 1):
-            search = client.search(state, settings)
-            chunks = list(
-                client.continuous(state, settings, max_chunks=args.stream_chunks)
+            chunks = list(client.continuous(
+                state, settings, max_chunks=args.stream_chunks or None
+            ))
+            shallow, search = select_budget_chunks(
+                chunks, args.shallow_visits, args.deep_visits
             )
             feat = search_budget_features(search, top_k=args.top_k)
-            pressure = search_pressure_from_zero(feat)
+            shallow_feat = search_budget_features(shallow, top_k=args.top_k)
+            paired = paired_search_pressure(shallow, search)
+            pressure = paired["search_pressure"]
             key = base64.b64encode(pack_moves(moves)).decode("ascii")
             f.write(
                 json.dumps(
                     _row(
                         key=key,
                         moves=list(moves),
-                        outcome=0,
+                        outcome=None,
                         src="zero-bot",
                         settings=settings,
                         feat=feat,
                         chunks=chunks,
                         pressure=pressure,
+                        paired=paired,
+                        source_game_key=f"zero-bot-{args.seed}",
+                        shallow_feat=shallow_feat,
+                        shallow_settings=shallow_settings,
                     ),
                     separators=(",", ":"),
                 )
@@ -195,19 +242,10 @@ def collect_from_bot(client: ZeroTeacherClient, args, out_path: Path) -> int:
             )
             bot = client.bot_move(state, settings)
             state = apply_zero_move(state, bot["move"])
-            moves.append(_zero_move_text(bot["move"]))
+            moves.append(zero_move_text(bot["move"]))
             if state.get("winner") is not None:
                 break
     return written
-
-
-def _zero_move_text(move: dict) -> str:
-    if move["kind"] == "pawn":
-        cell = int(move["target"])
-        col, row = cell % 9, cell // 9
-        return f"{chr(ord('a') + col)}{row + 1}"
-    ori = "h" if move["orientation"] == "horizontal" else "v"
-    return f"{chr(ord('a') + int(move['x']))}{int(move['y']) + 1}{ori}"
 
 
 def main() -> int:
@@ -219,13 +257,18 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=50)
     ap.add_argument("--min-ply", type=int, default=4)
     ap.add_argument("--max-ply", type=int, default=80)
-    ap.add_argument("--visits", type=int, default=400, help="MCTS rollouts (50 fast, 400 default)")
+    ap.add_argument("--visits", type=int, default=None, help="deprecated alias for --deep-visits")
+    ap.add_argument("--shallow-visits", type=int, default=50)
+    ap.add_argument("--deep-visits", type=int, default=400)
     ap.add_argument("--threads", type=int, default=2)
-    ap.add_argument("--stream-chunks", type=int, default=8)
+    ap.add_argument("--stream-chunks", type=int, default=32,
+                    help="safety cap; collector selects ~50 and ~400 visit chunks from one stream")
     ap.add_argument("--top-k", type=int, default=8)
     ap.add_argument("--bot-plies", type=int, default=30)
     ap.add_argument("--seed", type=int, default=1337)
     args = ap.parse_args()
+    if args.visits is not None:
+        args.deep_visits = args.visits
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS games (
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_src ON games(src_id);
+
+CREATE TABLE IF NOT EXISTS game_receipts (
+    request_id TEXT PRIMARY KEY,
+    game_id    INTEGER NOT NULL REFERENCES games(id)
+);
 """
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -208,6 +213,44 @@ def insert_single_game(
     gid = int(cur.lastrowid)
     conn.close()
     return gid
+
+
+def insert_single_game_idempotent(
+    moves: list[str],
+    outcome: int,
+    *,
+    request_id: str,
+    out_path: Path | None = None,
+    tag: str | None = None,
+) -> tuple[int, bool]:
+    """Insert once for a coordinator request id; returns (game id, inserted)."""
+    err = validate_game(moves, outcome)
+    if err:
+        raise ValueError(err)
+    if not request_id:
+        raise ValueError("request_id is required for idempotent game insert")
+    out_path = Path(out_path or DB_PATH)
+    conn = open_db(out_path, write=True)
+    try:
+        prior = conn.execute(
+            "SELECT game_id FROM game_receipts WHERE request_id = ?", (request_id,)
+        ).fetchone()
+        if prior:
+            return int(prior[0]), False
+        src_id = _get_or_create_src(conn, tag or "")
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO games(src_id, outcome, moves, moves_bin) VALUES (?, ?, ?, ?)",
+                (src_id, outcome, "", pack_moves(moves)),
+            )
+            gid = int(cur.lastrowid)
+            conn.execute(
+                "INSERT INTO game_receipts(request_id, game_id) VALUES (?, ?)",
+                (request_id, gid),
+            )
+        return gid, True
+    finally:
+        conn.close()
 
 
 def load_games_from_db(path: Path) -> list[tuple[list[str], int, str]]:

@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import hashlib
 import math
 import random
 import re
@@ -145,16 +146,17 @@ def sample_prefixes(
     max_ply: int,
     seed: int,
     skip: set[str],
-) -> list[tuple[list[str], int, str, str]]:
+) -> list[tuple[list[str], int, str, str, str]]:
     rng = random.Random(seed)
     candidates = []
     for moves, outcome, src in games:
+        game_key = hashlib.sha256(pack_moves(moves)).hexdigest()[:20]
         hi = min(max_ply, len(moves))
         for ply in range(min_ply, hi + 1):
             prefix = moves[:ply]
             key = base64.b64encode(pack_moves(prefix)).decode("ascii")
             if key not in skip:
-                candidates.append((prefix, outcome, src, key))
+                candidates.append((prefix, outcome, src, key, game_key))
     rng.shuffle(candidates)
     return candidates[:limit]
 
@@ -190,7 +192,7 @@ def main() -> int:
 
     written = 0
     with out_path.open("a", encoding="utf-8") as f:
-        for i, (moves, outcome, src, key) in enumerate(prefixes, 1):
+        for i, (moves, outcome, src, key, game_key) in enumerate(prefixes, 1):
             try:
                 shallow = probe(moves, args.shallow_depth, args.time, args.engine)
                 deep = probe(moves, args.deep_depth, args.time, args.engine)
@@ -203,6 +205,8 @@ def main() -> int:
                 "moves_bin": key,
                 "outcome": outcome,
                 "src": src,
+                "source_game_key": game_key,
+                "teacher": "titanium-native",
                 "ply": len(moves),
                 "engine": args.engine,
                 "shallow": shallow,
