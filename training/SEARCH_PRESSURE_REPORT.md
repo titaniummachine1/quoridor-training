@@ -40,6 +40,21 @@ Across five grouped splits it beat baseline every time:
 The saved candidate is bound to the SHA-256 of its base HalfPW weights. It is
 marked `native_validated`, not fully `validated`.
 
+### Fixed-holdout follow-up
+
+The native set was expanded to 4,999 rows and the split changed to a stable
+game-key hash, so appending future labels cannot move existing games across the
+train/validation boundary. On the same 122 held-out games:
+
+| Feature tap | MSE | Constant baseline | Improvement | High-quartile capture |
+|---|---:|---:|---:|---:|
+| hidden32 | 0.16234 | 0.16870 | +3.77% | 31.4% |
+| rich summaries | 0.15568 | 0.16870 | +7.72% | 40.5% |
+| routefull linear | 0.13957 | 0.16870 | +17.27% | 43.8% |
+
+This confirms that the original 32-unit tap discarded important route geometry.
+`routefull` is the native diagnostic candidate; it still does not control search.
+
 ## Zero-ink decision
 
 Zero-ink pressure was compared with Titanium pressure on the same positions.
@@ -54,11 +69,10 @@ future move-ordering or policy target. The trainer rejects zero rows by default.
 
 ## Next safe gate
 
-1. Collect several thousand more native labels with a fixed untouched game holdout.
-2. Confirm routefull beats baseline and captures the high quartile on every split.
-3. Export pressure inference as diagnostics only and benchmark its node cost.
-4. Map pressure to at most one ply of reduction relief/extra reduction.
-5. Preserve mate, exact TT, forced-move, and tactical overrides.
-6. Run identical-opening pressure-off versus pressure-on matches before enabling it.
+1. Export routefull pressure inference as diagnostics only and benchmark its node cost.
+2. Reject the design if pressure inference materially reduces search throughput.
+3. Map pressure to at most one ply of reduction relief/extra reduction behind a flag.
+4. Preserve mate, exact TT, forced-move, and tactical overrides.
+5. Run identical-opening pressure-off versus pressure-on matches before enabling it.
 
 No legal move may be pruned solely from pressure.

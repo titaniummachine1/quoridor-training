@@ -15,7 +15,6 @@ import argparse
 import base64
 import hashlib
 import json
-import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -75,8 +74,7 @@ def row_is_trainable(row: dict) -> bool:
 
 
 def grouped_split(rows: list[dict], seed: int, val_fraction: float = 0.10) -> tuple[list[dict], list[dict]]:
-    """Split whole source games, stratified by teacher family."""
-    rng = random.Random(seed)
+    """Split whole games with a stable hash, stratified by teacher family."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         key = str(row.get("source_game_key") or row.get("moves_bin") or "")
@@ -86,9 +84,18 @@ def grouped_split(rows: list[dict], seed: int, val_fraction: float = 0.10) -> tu
         by_source_mix[tuple(sorted({row_source(row) for row in batch}))].append(key)
     val_keys: set[str] = set()
     for keys in by_source_mix.values():
-        rng.shuffle(keys)
-        n_val = max(1, round(len(keys) * val_fraction)) if len(keys) > 1 else 0
-        val_keys.update(keys[:n_val])
+        scored = sorted(
+            (
+                int.from_bytes(hashlib.sha256(f"{seed}:{key}".encode()).digest()[:8], "big"),
+                key,
+            )
+            for key in keys
+        )
+        cutoff = int(val_fraction * (1 << 64))
+        selected = [key for score, key in scored if score < cutoff]
+        if not selected and len(scored) > 1:
+            selected = [scored[0][1]]
+        val_keys.update(selected)
     train = [row for key, batch in grouped.items() if key not in val_keys for row in batch]
     val = [row for key, batch in grouped.items() if key in val_keys for row in batch]
     return train, val

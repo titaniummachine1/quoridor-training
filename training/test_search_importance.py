@@ -72,6 +72,29 @@ class SearchImportanceTests(unittest.TestCase):
         val_keys = {row["source_game_key"] for row in val}
         self.assertTrue(train_keys.isdisjoint(val_keys))
 
+    def test_grouped_split_keeps_existing_games_fixed_when_data_is_appended(self):
+        rows = [
+            {"teacher": "titanium-native", "source_game_key": f"game-{i}", "moves_bin": str(i)}
+            for i in range(40)
+        ]
+        train, val = grouped_split(rows, seed=1337)
+        assignment = {
+            row["source_game_key"]: "train" for row in train
+        } | {
+            row["source_game_key"]: "val" for row in val
+        }
+        extended = rows + [
+            {"teacher": "titanium-native", "source_game_key": f"new-{i}", "moves_bin": f"n{i}"}
+            for i in range(20)
+        ]
+        train2, val2 = grouped_split(extended, seed=1337)
+        assignment2 = {
+            row["source_game_key"]: "train" for row in train2
+        } | {
+            row["source_game_key"]: "val" for row in val2
+        }
+        self.assertTrue(all(assignment[key] == assignment2[key] for key in assignment))
+
 
 if __name__ == "__main__":
     unittest.main()
