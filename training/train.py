@@ -446,11 +446,12 @@ def main():
         model.train()
         return total / n if n else 0.0
 
+    end_epoch = start_ep + args.epochs
     print(f"\nTraining for {args.epochs} epochs, lr={args.lr}, scale={args.scale}, "
           f"batch={args.batch}, target=WDL")
     model.train()
 
-    for epoch in range(start_ep, args.epochs):
+    for epoch in range(start_ep, end_epoch):
         epoch_loss = 0.0
         epoch_n    = 0
         for batch in train_dl:
@@ -479,7 +480,7 @@ def main():
                     print(f"  ** new best val_loss={best_val:.5f}")
 
         ep_loss = epoch_loss / max(epoch_n, 1)
-        print(f"Epoch {epoch+1}/{args.epochs}  avg_train_loss={ep_loss:.5f}")
+        print(f"Epoch {epoch - start_ep + 1}/{args.epochs}  avg_train_loss={ep_loss:.5f}")
         # End-of-epoch checkpoint
         ep_file = out_dir / f"ckpt_epoch{epoch+1:04d}.pt"
         val_loss = run_val()

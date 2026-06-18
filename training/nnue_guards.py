@@ -33,6 +33,7 @@ SNAP_DIR = CKPT_DIR / "snapshots"
 ELO_HISTORY = DATA_DIR / "nnue_elo_history.json"
 GUARD_STATE = DATA_DIR / "nnue_guard_state.json"
 NNUE_LOG = DATA_DIR / "nnue_train.log"
+TRAINING_SCHEMA = "halfpw-sparse-route5-ws14-v1"
 
 SOFT_CAP_BYTES = 500 * 1024 * 1024
 HARD_CAP_BYTES = 1024 * 1024 * 1024
@@ -344,7 +345,8 @@ def count_db_games(db_path: Path | None = None) -> int:
 
 
 def load_guard_state() -> dict:
-    return _load_json(GUARD_STATE, {
+    state = _load_json(GUARD_STATE, {
+        "training_schema": TRAINING_SCHEMA,
         "last_train_game_count": 0,
         "last_trained_game_id": 0,
         "last_train_ts": 0,
@@ -354,6 +356,16 @@ def load_guard_state() -> dict:
         "last_deploy_ts": 0,
         "deploy_runs": 0,
     })
+    if state.get("training_schema") != TRAINING_SCHEMA:
+        state["training_schema"] = TRAINING_SCHEMA
+        state["games_since_deploy"] = 0
+        state["last_deploy_ts"] = time.time()
+        save_guard_state(state)
+        nnue_log(
+            f"training schema -> {TRAINING_SCHEMA}; reset deployment cadence "
+            "without advancing the game cursor"
+        )
+    return state
 
 
 def save_guard_state(state: dict) -> None:

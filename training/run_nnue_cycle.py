@@ -118,9 +118,8 @@ def run_on_game(
 
     ok, pre_msg = pretrain_sanity_ok(batch=False)
     if not ok:
-        _log(f"game {game_id} skipped: {pre_msg}")
-        mark_game_trained(game_id)
-        return 0
+        _log(f"game {game_id} blocked: {pre_msg}; left pending")
+        return 1
 
     cap_ok, cap_msg = enforce_artifact_cap()
     if not cap_ok:
@@ -146,7 +145,7 @@ def run_on_game(
     record_elo_sample(load_manifest())
 
     if dry_run:
-        mark_game_trained(game_id)
+        _log(f"game {game_id} dry-run: training state unchanged")
         return 0
 
     cmd = _train_cmd(game_ids=[game_id], micro=True)
@@ -202,12 +201,16 @@ def run_catch_up(*, dry_run: bool = False, max_games: int = CATCH_UP_MAX_GAMES) 
 
     _log(f"catch-up: micro-train {len(pending)} game(s) (ids {pending[0]}–{pending[-1]})")
     rc = 0
+    last_done = None
     for gid in pending:
         r = run_on_game(gid, dry_run=dry_run)
         if r != 0:
             rc = r
-    if pending:
-        _log(f"catch-up done through id {pending[-1]}")
+            _log(f"catch-up: stopped at game {gid} (rc={r}); later games left pending")
+            break
+        last_done = gid
+    if last_done is not None:
+        _log(f"catch-up done through id {last_done}")
     return rc
 
 

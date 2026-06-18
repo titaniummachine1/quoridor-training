@@ -100,9 +100,20 @@ python training/regression_triage.py
 
 Restart the overnight pool after rebuild so match slots and eval-batch share the same binary.
 
+For a bounded laptop smoke that generates one adaptive Ka attempt and one
+adaptive zero-ink attempt while draining successful micro-trains before exit:
+
+```powershell
+python training/run_swiss_overnight.py --parallel 2 --games 2
+```
+
+Ka remains a remote full-game opponent only. Never feed Ka scalar evaluation
+labels into HalfPW; external MCTS attention belongs only in the separate
+search-pressure dataset.
+
 ## Checkpoint resume
 
-`run_nnue_cycle.py` always passes `--resume` to `train.py` for micro-trains. That is fine once you have at least one checkpoint stamped `halfpw-field11-ws14-legal-wall-v1` from the legal-wall era.
+`run_nnue_cycle.py` always passes `--resume` to `train.py` for micro-trains. That is fine once you have at least one checkpoint stamped `halfpw-sparse-route5-ws14-v1`.
 
 **Do not** expect useful resume from pre-ws[14 checkpoints whose optimizer state was trained when `ws[14]` meant `corridor_width_me`. `train.py` checks `TRAINING_SCHEMA` on load; on mismatch it prints a warning and **re-inits weights from deployed `net_weights.bin`** (optimizer state discarded). No manual `--ckpt` override exists today.
 
@@ -118,7 +129,7 @@ Fresh pool start after a schema or binary change: let the first micro-train crea
 | Artifact hard cap  | 1 GB -> refuse train                                                                                       |
 | Pre-train win rate | skip batch if v15 vs ti-pure >70%; warn micro at >58%                                                      |
 | Elo drop           | snapshot to `checkpoints/snapshots/` if ladder -12+ from peak                                              |
-| Resume schema      | refuse checkpoints without `halfpw-field11-ws14-legal-wall-v1`; on mismatch re-init from `net_weights.bin` |
+| Resume schema      | refuse checkpoints without `halfpw-sparse-route5-ws14-v1`; on mismatch re-init and reset deploy cadence   |
 | Engine stamp       | block eval/self-play/train if `titanium.exe` hash changed                                                  |
 | Parity/schema      | training blocked unless parity passes and `legal_wall_count` exists                                        |
 

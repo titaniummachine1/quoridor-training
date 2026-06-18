@@ -219,9 +219,11 @@ def stop_coordinator() -> None:
     _coord_proc = None
 
 
-def run_pool(slots: int, *, enable_train: bool = True) -> int:
+def run_pool(slots: int, *, enable_train: bool = True, max_games: int = 0) -> int:
     """Long-lived Node pool — slots claim pairings independently via coordinator."""
     cmd = ["node", str(OVERNIGHT_BATCH), "--pool", "--slots", str(slots)]
+    if max_games > 0:
+        cmd += ["--max-games", str(max_games)]
     env = os.environ.copy()
     env.setdefault("COORDINATOR_URL", coordinator_url())
     _pool_log(f"\n--- pool start {time.strftime('%Y-%m-%d %H:%M:%S')} ---")
@@ -245,7 +247,7 @@ def run_pool(slots: int, *, enable_train: bool = True) -> int:
         os.environ["NNUE_POOL_QUIET"] = "1"
         from run_nnue_cycle import startup_train_catch_up, run_on_game
 
-        startup_train_catch_up()
+        training_blocked = startup_train_catch_up() != 0
         while not train_stop.is_set():
             try:
                 item = train_q.get(timeout=1.0)
@@ -254,15 +256,30 @@ def run_pool(slots: int, *, enable_train: bool = True) -> int:
             if item is None:
                 train_q.task_done()
                 break
+            if training_blocked:
+                from nnue_guards import nnue_log
+                nnue_log(f"game {item} deferred: an earlier training failure remains pending")
+                train_q.task_done()
+                continue
             try:
-                run_on_game(item)
+                rc = run_on_game(item)
+                if rc != 0:
+                    from nnue_guards import nnue_log
+                    nnue_log(
+                        f"game {item} failed training (rc={rc}); "
+                        "pausing trainer so the cursor cannot skip it"
+                    )
+                    training_blocked = True
             except Exception as e:
                 from nnue_guards import nnue_log
                 nnue_log(f"error on game {item}: {e}")
+                training_blocked = True
             train_q.task_done()
 
+    train_thread = None
     if enable_train:
-        threading.Thread(target=train_worker, daemon=True).start()
+        train_thread = threading.Thread(target=train_worker, daemon=False)
+        train_thread.start()
 
     assert proc.stdout is not None
     rc = 0
@@ -276,9 +293,13 @@ def run_pool(slots: int, *, enable_train: bool = True) -> int:
                     train_q.put(gid)
         rc = proc.wait()
     finally:
-        train_stop.set()
         if enable_train:
+            train_q.join()
             train_q.put(None)
+            train_q.join()
+            if train_thread is not None:
+                train_thread.join(timeout=30)
+        train_stop.set()
     return rc
 
 
@@ -293,6 +314,8 @@ def main():
                     help="(legacy) ignored in pool mode")
     ap.add_argument("--no-train", action="store_true",
                     help="Disable background HalfPW NNUE training")
+    ap.add_argument("--games", type=int, default=0,
+                    help="Stop after this many game attempts (0 = continuous)")
     args = ap.parse_args()
 
     if not BIN.exists():
@@ -369,7 +392,7 @@ def main():
     start_coordinator(slots=slots)
 
     try:
-        rc = run_pool(slots, enable_train=enable_train)
+        rc = run_pool(slots, enable_train=enable_train, max_games=max(0, args.games))
         if rc != 0:
             print(f"pool exited {rc}", flush=True)
     except KeyboardInterrupt:
