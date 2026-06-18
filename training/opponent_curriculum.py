@@ -18,6 +18,7 @@ MAX_VISITS = 1_000_000
 WINDOW_GAMES = 16
 TARGET_SCORE = 1.0 / (1.0 + 10.0 ** (20.0 / 400.0))
 OPPONENTS = ("ka", "zero")
+ZERO_FALLBACK_WINS = 4
 
 
 def _default_opponent() -> dict:
@@ -27,6 +28,7 @@ def _default_opponent() -> dict:
         "window": [],
         "windows_completed": 0,
         "games_completed": 0,
+        "last_window_wins": None,
     }
 
 
@@ -110,6 +112,7 @@ def record_result(
             entry["visits"] = min(MAX_VISITS, old_visits + VISIT_STEP * steps)
         entry["window"] = entry["window"][WINDOW_GAMES:]
         entry["windows_completed"] = int(entry.get("windows_completed", 0)) + 1
+        entry["last_window_wins"] = wins
         update = {
             "schema": SCHEMA,
             "opponent": opponent,
@@ -128,3 +131,13 @@ def record_result(
         "window_games": len(entry["window"]),
         "update": update,
     }
+
+
+def preferred_adaptive_opponent(state: dict | None = None) -> str:
+    """Prefer zero; fall back to Ka only after a clearly losing zero window."""
+    state = state or load_state()
+    zero = state["opponents"]["zero"]
+    if int(zero.get("windows_completed", 0)) == 0:
+        return "zero"
+    wins = zero.get("last_window_wins")
+    return "ka" if wins is not None and int(wins) <= ZERO_FALLBACK_WINS else "zero"

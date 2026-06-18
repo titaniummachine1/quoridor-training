@@ -100,16 +100,17 @@ python training/regression_triage.py
 
 Restart the overnight pool after rebuild so match slots and eval-batch share the same binary.
 
-For a bounded laptop smoke that generates one adaptive Ka attempt and one
-adaptive zero-ink attempt while draining successful micro-trains before exit:
+For a bounded laptop smoke using only local opponents while draining successful
+micro-trains before exit:
 
 ```powershell
-python training/run_swiss_overnight.py --parallel 2 --games 2
+python training/run_swiss_overnight.py --local-only --parallel 2 --games 2
 ```
 
-Ka remains a remote full-game opponent only. Never feed Ka scalar evaluation
-labels into HalfPW; external MCTS attention belongs only in the separate
-search-pressure dataset.
+The normal adaptive slot prefers zero-ink. It falls back to Ka only after
+Titanium scores at most 4/16 in a complete color-balanced zero window. Never
+feed Ka scalar evaluation labels into HalfPW; external MCTS attention belongs
+only in the separate search-pressure dataset.
 
 For unattended local-only volume with no remote engines:
 

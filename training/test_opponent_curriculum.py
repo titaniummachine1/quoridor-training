@@ -8,7 +8,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from opponent_curriculum import MAX_VISITS, claim_game, load_state, record_result
+from opponent_curriculum import (
+    MAX_VISITS,
+    claim_game,
+    load_state,
+    preferred_adaptive_opponent,
+    record_result,
+)
 
 
 class CurriculumTests(unittest.TestCase):
@@ -57,6 +63,24 @@ class CurriculumTests(unittest.TestCase):
                 state_path=self.state, events_path=self.events,
             )
         self.assertEqual(result["visits"], MAX_VISITS)
+
+    def test_zero_is_preferred_until_a_crushing_complete_window(self):
+        state = load_state(self.state)
+        self.assertEqual(preferred_adaptive_opponent(state), "zero")
+        for i in range(16):
+            record_result(
+                "zero", our_win=i < 4, game_id=str(i), visits=1,
+                state_path=self.state, events_path=self.events,
+            )
+        self.assertEqual(preferred_adaptive_opponent(load_state(self.state)), "ka")
+
+    def test_zero_remains_preferred_when_minimum_budget_is_playable(self):
+        for i in range(16):
+            record_result(
+                "zero", our_win=i < 5, game_id=str(i), visits=1,
+                state_path=self.state, events_path=self.events,
+            )
+        self.assertEqual(preferred_adaptive_opponent(load_state(self.state)), "zero")
 
 
 if __name__ == "__main__":

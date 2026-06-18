@@ -57,8 +57,6 @@ from manifest import (  # noqa: E402
 from nnue_guards import DEPLOY_EVERY_GAMES, HALFPW_WEIGHT_BYTES, net_weights_size_ok  # noqa: E402
 from engine_identity import assert_engine_ready  # noqa: E402
 from swiss_tournament import (  # noqa: E402
-    KA_TIME_CONTROLS,
-    MAX_KA_PER_TC,
     POOL_SLOTS_MAX,
     POOL_SLOTS_WITH_TRAIN,
     Pairing,
@@ -372,9 +370,8 @@ def main():
     if enable_train and slots < POOL_SLOTS_MAX:
         _pool_print(f"  ({POOL_SLOTS_MAX - slots} slot reserved for eval-batch micro-train; use --parallel 8 or --no-train for full {POOL_SLOTS_MAX})")
     _pool_print(f"  Baseline anchor: {ANCHOR_ENTITY} = {int(ANCHOR_RATING)}")
-    ka_cap = ", ".join(f"max {MAX_KA_PER_TC} ka@{tc}" for tc in KA_TIME_CONTROLS)
-    _pool_print(f"  Ponder on; Ka master queue — {ka_cap}")
-    _pool_print("  Reserved: adaptive Ka + adaptive zero-ink + ti-pure@10s + v15 self@10s + frozen")
+    _pool_print("  Adaptive: zero-ink first; Ka fallback only after a <=4/16 zero window")
+    _pool_print("  Reserved: one adaptive remote + ti-pure@10s + v15 self@10s + frozen")
     if not args.no_train:
         _pool_print(
             f"  Background NNUE: micro-train; deploy every {DEPLOY_EVERY_GAMES} trains; "

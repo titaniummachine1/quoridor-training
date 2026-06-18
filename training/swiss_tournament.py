@@ -33,6 +33,7 @@ from manifest import (
     matchup_key,
 )
 from pool_labels import pairing_display_label
+from opponent_curriculum import preferred_adaptive_opponent
 
 ROOT = Path(__file__).resolve().parent.parent
 REMOTE_TIMING = ROOT / "training" / "data" / "remote_timing.json"
@@ -239,8 +240,7 @@ FROZEN_BENCH_RATE = float(os.environ.get("FROZEN_BENCH_RATE", "0.28"))  # legacy
 KA_TIME_CONTROLS = ("adaptive",)
 MAX_KA_PER_TC = int(os.environ.get("MAX_KA_PER_TC", "1"))
 OUR_TIME_CONTROLS = ("5s", "10s")
-RESERVED_KA_SLOTS = len(KA_TIME_CONTROLS)
-RESERVED_ZERO_SLOTS = 1
+RESERVED_ADAPTIVE_SLOTS = 1
 RESERVED_TI_PURE_10S = 1
 RESERVED_SELF_10S = 1
 RESERVED_FROZEN_5S = 1
@@ -319,13 +319,10 @@ def pick_one_pairing(
         return None
 
     if allow_remote:
-        for tc in KA_TIME_CONTROLS:
-            if ka_inf.get(tc, 0) < MAX_KA_PER_TC:
-                p = pick_ka(tc)
-                if p:
-                    return p
-        if zero_inf < RESERVED_ZERO_SLOTS:
-            p = pick_zero()
+        adaptive_in_flight = zero_inf + sum(ka_inf.values())
+        if adaptive_in_flight < RESERVED_ADAPTIVE_SLOTS:
+            preferred = preferred_adaptive_opponent()
+            p = pick_zero() if preferred == "zero" else pick_ka("adaptive")
             if p:
                 return p
 
