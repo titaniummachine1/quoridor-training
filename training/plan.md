@@ -75,7 +75,7 @@ Computed in **engine only**:
 
 - Count of all **valid wall placements**
 - Valid = both players still have a path to goal after placement
-- Uses existing PBFF legality logic (no duplication)
+- Uses existing binary flood fill / `pbff_wall_legal` path checks (no duplication)
 
 ---
 

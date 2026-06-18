@@ -7,15 +7,15 @@ knowledge is already in the weights; new inputs are zero-init and learned as res
 
 ## Frozen Architecture (2026-06)
 
-| Component         | Contract                                                                                  |
-| ----------------- | ----------------------------------------------------------------------------------------- |
-| Field planes (11) | goal_inv, pawn_fwd, corridor_delta, path_cross, choke x2, contested per-player BFS        |
-| Sparse embeds     | w1c (128 wall slots), po, px                                                              |
-| ws[0-12]          | trained interaction terms; do not change semantics                                        |
-| ws[13]            | fragile-lead formula (`pd * w_opp / 10`)                                                  |
-| ws[14]            | `legal_wall_count / 128` (path-valid wall slots)                                          |
-| ws[15]            | opponent corridor width                                                                   |
-| Search            | titanium-v15: full legal movegen, warm session, not routed through infinite `session_v15` |
+| Component         | Contract                                                                                     |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| Field planes (11) | goal_inv, pawn_fwd, corridor_delta, path_cross, choke x2, contested per-player BFS           |
+| Sparse embeds     | w1c (128 wall slots), po, px                                                                 |
+| ws[0-12]          | trained interaction terms; do not change semantics                                           |
+| ws[13]            | fragile-lead formula (`pd * w_opp / 10`)                                                     |
+| ws[14]            | `legal_wall_count / 128` (path-valid wall slots; counted via bitboard flood fill / `pbff_*`) |
+| ws[15]            | opponent corridor width                                                                      |
+| Search            | titanium-v15: full legal movegen, warm session, not routed through infinite `session_v15`    |
 
 Certificate/race-proof layer remains the only hard eval override.
 

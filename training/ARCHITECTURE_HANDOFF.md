@@ -46,10 +46,22 @@ The network should make the engine spend **less time understanding the board** a
 ### Layer A — hard engine
 
 - Legal movegen
-- Wall legality
+- Wall legality (binary / bitboard flood fill — see **Terminology** below)
 - BFS path checks
 - Transposition table
 - Alpha-beta / minimax search
+
+### Terminology — `pbff_*` / wall legality / flood fill
+
+In this repo, **`pbff_*`** names a family of **binary flood fill** (also **bitboard flood fill**, **BFF**) helpers in `engine/src/path/parallel.rs`. They answer the standard Quoridor question after a tentative wall placement: _do both players still have a path to their goal?_
+
+- **Not** a separate neural or search architecture, and **not** a proprietary algorithm — it is ordinary flood fill over compact `u128` reachability masks.
+- **`pbff_to_goal`** — BFF from a start square to a goal row; returns visited bits for reuse.
+- **`pbff_wall_legal`** — two-player wall trial: flood player 1, then player 2 (with visited-bit reuse / “bit theft”).
+- **`expand_wave`** — one dilation step of that flood (four directional shifts on a bitboard).
+- **SIMD / shift tricks** (`expand_wave`, optional Kogge–Stone variants in benches) are **implementation accelerators**, not a different legality rule.
+
+ACE distance fields (`acev13/dist.rs`) use the same **bitboard flood** idea via `expand_frontier` + `DirMasks`; Titanium wall movegen uses `pbff_wall_legal` on `WallGrids`. Same graph question, two coordinate layouts — function names stay `pbff_*` for historical reasons.
 
 ### Layer B — geometric feature extractor
 

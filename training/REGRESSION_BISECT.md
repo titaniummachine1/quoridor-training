@@ -2,7 +2,7 @@
 
 Evidence-based investigation when engine strength drops. **Do not blame NN training until search/session/binary differences are isolated.**
 
-See also: [`AUDIT_REPORT.md`](AUDIT_REPORT.md) (infinite-search map).
+See also: [`AUDIT_REPORT.md`](AUDIT_REPORT.md) (infinite-search map), [`ARCHITECTURE_HANDOFF.md`](ARCHITECTURE_HANDOFF.md) § _Terminology_ (`pbff_*` = binary/bitboard flood fill for wall legality — not a separate search mode).
 
 ---
 
