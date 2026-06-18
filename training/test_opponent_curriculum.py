@@ -26,17 +26,17 @@ class CurriculumTests(unittest.TestCase):
         self.assertEqual([c["our_is_p1"] for c in claims], [True, False, True, False])
         self.assertEqual([c["opponent_visits"] for c in claims], [1, 1, 1, 1])
 
-    def test_window_advances_by_fifty_at_target(self):
+    def test_window_advances_by_twenty_at_target(self):
         for i in range(16):
             result = record_result(
                 "ka", our_win=i < 8, game_id=str(i), visits=1,
                 state_path=self.state, events_path=self.events,
             )
-        self.assertEqual(result["visits"], 51)
+        self.assertEqual(result["visits"], 21)
         self.assertEqual(result["window_games"], 0)
         event = json.loads(self.events.read_text(encoding="utf-8").strip())
         self.assertEqual(event["old_visits"], 1)
-        self.assertEqual(event["new_visits"], 51)
+        self.assertEqual(event["new_visits"], 21)
 
     def test_losing_window_never_decreases(self):
         for i in range(16):

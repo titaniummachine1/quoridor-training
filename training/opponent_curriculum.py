@@ -13,7 +13,7 @@ EVENTS_PATH = ROOT / "training" / "data" / "opponent_curriculum_events.jsonl"
 
 SCHEMA = "opponent-curriculum-v1"
 START_VISITS = 1
-VISIT_STEP = 50
+VISIT_STEP = 20
 MAX_VISITS = 1_000_000
 WINDOW_GAMES = 16
 TARGET_SCORE = 1.0 / (1.0 + 10.0 ** (20.0 / 400.0))
