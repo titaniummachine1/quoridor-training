@@ -760,17 +760,122 @@ Infeasible thresholds (unsafe_activations > 0) are still excluded before selecti
 
 ### v2 data collection status
 
-| Dataset | Rows | v2 rows | SAFE | UNSAFE | Activate |
-|---------|------|---------|------|--------|----------|
-| Natural v3 (2026-06-19) | 696 | 696 | 696 | 0 | 77 |
-| Stratified v3 | PENDING | — | — | — | — |
+| Dataset | Rows | SAFE | UNSAFE | Activate | Nonzero history |
+|---------|------|------|--------|----------|-----------------|
+| Natural v3 (2026-06-19) | 696 | 696 | 0 | 77 | 13/696 |
+| Stratified v3 (2026-06-19) | 668→664 dedup | 661 | 7 | 197 | 36/668 |
 
-Engine commit for v3 data: `37026f3` (added `total_legal_moves` + `history_score`).
+Engine commit for v3 data: `37026f3`. Splits: natural 480/96/120 (train/cal/test), stratified 480/104/84.
+
+Note: history_score is 0 for most events — history table starts empty and fills during a game; early-position probes see 0 values. Signal will grow with games from mid/late positions.
+
+---
+
+## Stage-2 sweep results — 2026-06-19
+
+Checkpoint: `training/checkpoints/sidecar_v2/`
+
+### A variant sweep — 180 runs
+
+Best config: `ratio_nat=67%, neg_w=2.0, uw=100.0` → best seed=16381 at `thr=0.08, cal_net=29.2`
+
+Seed stability at best config (10 seeds):
+
+| seed | thr | cal_net | activations |
+|------|-----|---------|-------------|
+| 42 | 0.08 | 8.6 | 22 |
+| 137 | 0.08 | 11.4 | 18 |
+| 271 | 0.18 | 10.3 | 1 |
+| 512 | 0.05 | 14.1 | 57 |
+| 1337 | 0.08 | 11.4 | 18 |
+| 2027 | 0.08 | 18.9 | 23 |
+| 4099 | 0.08 | 18.9 | 23 |
+| 8191 | 0.15 | 10.3 | 1 |
+| 16381 | 0.08 | 29.2 | 24 |
+| 65537 | 0.08 | 18.9 | 23 |
+
+High variance (8.6–29.2). With only 6 calibration positives this is expected noise.
+
+### Coefficient inspection (frozen seed=16381, variant A)
+
+| Parameter | Value |
+|-----------|-------|
+| bias | −5.797 |
+| Platt scale | 1.305 |
+| Platt shift | 0.437 |
+| hidden32 weight norm | 1.343 |
+| hidden32 max |abs| | 0.480 |
+| hidden32 mean |abs| | 0.223 |
+
+Context5 weights and per-seed variance (10 seeds):
+
+| Feature | Frozen | Mean | Stdev | Sign stable |
+|---------|--------|------|-------|-------------|
+| remaining_depth | +0.218 | +0.222 | 0.007 | ✓ |
+| move_index | +0.052 | +0.111 | 0.029 | ✓ |
+| base_reduction | +0.052 | +0.080 | 0.021 | ✓ |
+| is_horizontal | +0.288 | +0.321 | 0.020 | ✓ |
+| is_vertical | −0.065 | −0.127 | 0.041 | ✓ |
+
+`remaining_depth` and `is_horizontal` are the dominant positive signals. All context5 signs are stable across seeds.
+
+### Ablation summary (calibration, per-variant independent threshold)
+
+| Variant | Features | Median cal_net | Feasible |
+|---------|----------|---------------|---------|
+| **C / L** | context5 only (5) | **21.5** | 10/10 |
+| A / PL | hidden32 + context5 (37) | 12.8 | 10/10 |
+| B | hidden32 + context4 (no move_index) | 12.4 | 10/10 |
+| PLO | P+L+history_score (38) | 12.4 | 10/10 |
+| PLOB | P+L+O+rank_percentile (39) | 17.5 | 10/10 |
+| P / D | hidden32 only (32) | 11.1 | 10/10 |
+
+**C/L (context5 alone) is the most consistent calibration performer.** All seeds converge to exactly the same output — the calibration set is dominated by easily-learnable signal in context5.
+
+### Feature-group test evaluation (per-variant independent threshold)
+
+| Variant | thr | act | TP | unsafe | tp_delta | safe_fp_delta | gross | net | prec |
+|---------|-----|-----|----|----|---------|--------------|-------|-----|------|
+| **P** | 0.05 | 98 | **7** | 0 | — | — | — | **44.40** | 0.071 |
+| PL / A | 0.08 | 38 | 0 | 0 | — | — | 29 | 2.40 | 0.000 |
+| PLO | 0.08 | 38 | 0 | 0 | — | — | 29 | 2.40 | 0.000 |
+| PLOB | 0.08 | 39 | 0 | 0 | — | — | — | 1.70 | 0.000 |
+| L / C | 0.08 | 15 | 0 | 0 | — | — | — | −0.50 | 0.000 |
+
+### Baseline comparisons (test set)
+
+| Baseline | act | TP | unsafe | net |
+|----------|-----|----|----|-----|
+| **red≥2 (rule)** | 105 | 8 | 0 | **48.50** |
+| Always-on | 120 | 8 | 0 | 48.00 |
+| mi≥32 (rule) | 68 | 5 | 0 | 14.40 |
+| P (trained) | 98 | 7 | 0 | 44.40 |
+| A/PL (trained) | 38 | 0 | 0 | 2.40 |
+| L (trained) | 15 | 0 | 0 | −0.50 |
+| mi≥12+d≥6 (rule) | 8 | 0 | 0 | −2.60 |
+| red==3 (rule) | 7 | 0 | 0 | −4.90 |
+
+### Key findings
+
+1. **No trained model beats `red≥2`** — the simple rule outperforms everything (net=48.50 vs P's 44.40).
+2. **L (context5 alone) has calibration–test gap** — calibration median=21.5 (best), but test net=−0.50 (worst). The model overfits the calibration distribution.
+3. **Adding context5 to hidden32 hurts test performance** — PL/A goes from 44.40 (P alone) to 2.40. Context5 interferes with the hidden32 TP-identifying signal.
+4. **history_score and rank_percentile add no value** — PLO and PLOB match PL exactly. Likely because 96% of events have history_score=0.
+5. **The calibration set is too small** — with 6 positives and 120 cal events, single-seed cal_net variance is 8.6–29.2 (noise dominated). Conclusions about ranking are unreliable.
+6. **Root cause: data volume** — the GO verdict is technically met but precision=0 on test with TP=0 for the best-calibrating models. The safe_fp_delta alone drives net>0 for A/PL.
+
+### GO/NO-GO verdict (Stage-2)
+
+**FINAL TEST VERDICT: GO (technical), NO-GO (practical)**
+
+- Technical GO: net=2.40 > 0, unsafe=0, `red≥2` rule achieves net=48.5 cleanly
+- Practical NO-GO: zero TP identified by A/B/C/PL/PLO/PLOB on test; no trained model beats simple rules
+- **Recommendation: collect fresh holdout (2000–5000 events) before advancing**
 
 ### Next steps
 
-1. Stratified v3 collection (in progress)
-2. Feature-group sweep (P/L/PL/PLO/PLOB) — automatic when ≥30 v2 cal rows available
-3. Leave-one-out from best feature group
-4. Shadow validation on v1 artifact
-5. Fresh holdout collection (2000–5000 events, sealed until protocol frozen)
+1. Fresh holdout collection (2000–5000 events, sealed until after the above protocol is frozen)
+2. Shadow validation on v2 artifact
+3. Leave-one-out from P group (remove hidden units one at a time to diagnose which hidden dims carry the TP signal)
+4. Investigate why history_score is 0 for 94%+ of events — consider collecting from deeper-game positions
+5. Consider always-on deployment as a simpler alternative to the trained model
