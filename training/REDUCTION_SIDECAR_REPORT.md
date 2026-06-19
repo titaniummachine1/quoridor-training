@@ -695,3 +695,82 @@ This step is planned but not yet executed.
 | Final test verdict | **GO** | net=+40.1 nodes, 0 unsafe activations, threshold=0.05 |
 | Shadow validation (post-training) | PENDING | not yet executed |
 | Runtime activation | **NO-GO** | artifact produced; activation intentionally not wired; tree-parity test pending |
+
+---
+
+## Stage-2 LMRH Feature Audit — 2026-06-19
+
+### Correction to prior ablation
+
+The prior A/B/C/D comparison at `threshold=0.05` was **exploratory only** —
+shared threshold is not a fair model comparison because different variants have
+different calibration surfaces. The ablation is now re-run with each variant
+**independently calibrated** (each calls `select_threshold` on its own calibration
+outputs). Results are in `ablation_metrics.csv` (column `own_threshold`).
+
+### Native LMR feature provenance
+
+Every input to the sidecar traced to its origin in `engine/src/acev13/search.rs`:
+
+| Feature | Origin | Class | Runtime cost | LMRH status |
+|---------|---------|-------|-------------|-------------|
+| `hidden[0..32]` (child net activations) | `self.halfpw_acc.output()` before `ab()` returns | pre-search (post-move) | incremental accumulator, O(n_changed) | ✓ P group |
+| `remaining_depth` = `(depth−1)/30` | `depth` arg to `ab()` | hard gate (LMR fires only at depth≥3) | free | ✓ L group |
+| `move_index` = `i/128` | loop counter `i` in `ab()` | hard gate (LMR fires only at i≥4) | free | ✓ L group |
+| `base_reduction` = `red/4` | `ace_graduated_lmr_reduction(i, depth)` | soft input | one comparison, free | ✓ L group |
+| `is_horizontal` = `move.endswith("h")` | low bit of `m` | soft input | free | ✓ L group |
+| `is_vertical` = `move.endswith("v")` | complement | soft input | free | ✓ L group |
+| `history_score` = raw `history_tbl[m]` | `self.history_tbl[m as usize]` (already read in `order_moves`) | soft input | **already paid** | ✓ O group (v2) |
+| `total_legal_moves` = `n` from `gen_moves` | `let n = self.gen_moves(…)` at line 2123 | pre-computed | **already paid** (movegen) | ✓ B group (v2) |
+| `rank_percentile` = `i / max(n−1, 1)` | derived from `i` and `n` | soft input | one division, free | ✓ B group (v2) |
+
+**Forbidden inputs** (labels, not features — never in model):
+`baseline_nodes`, `counterfactual_nodes`, `net_nodes_saved`, verification outcome,
+search bound type, alpha/beta values.
+
+### Signed economics fix
+
+Prior reports counted only TP gross savings. As of this session, **ALL activated
+events contribute their true signed node delta** (`baseline_nodes − counterfactual_nodes`):
+
+- **TP delta** (`activate_plus_one=True`): positive (saves nodes)
+- **Safe-FP delta** (`SAFE` but not worthwhile): small signed value, often 0
+- **Unsafe delta** (`UNSAFE`): large negative — decision changed
+
+The objective function for threshold selection is now:
+```
+net = (tp_delta + safe_fp_delta + unsafe_delta) − 0.7 × n_activations
+```
+
+Infeasible thresholds (unsafe_activations > 0) are still excluded before selection.
+
+### Infrastructure changes (2026-06-19)
+
+| Change | File | Description |
+|--------|------|-------------|
+| Engine fields | `engine/src/acev13/search.rs` | Added `total_legal_moves: usize`, `history_score: i32` to `ReductionProbeEvent` |
+| JSON output | `engine/src/main.rs` | Both fields serialised in probe event JSON |
+| Schema | `reduction_counterfactual_schema.py` | `FEATURE_SCHEMA_V2`, `rank_percentile()`, `context_features_v2()` |
+| Collector | `collect_reduction_counterfactuals.py` | Emits `total_legal_moves`, `history_score`, `rank_percentile`, `context7` |
+| Trainer variants | `train_reduction_sidecar_v2.py` | Adds P/L/PL/PLO/PLOB feature groups; fair per-variant calibration |
+| Signed economics | `train_reduction_sidecar_v2.py` | `tp_delta + safe_fp_delta + unsafe_delta` for ALL activated |
+| Baselines | `train_reduction_sidecar_v2.py` | Always-on baseline and handcrafted rule baselines |
+| Coefficient inspection | `train_reduction_sidecar_v2.py` | Bias, context weights, per-seed variance |
+| Tests | `test_reduction_counterfactuals.py` | +15 tests: signed economics, rank_percentile, context7 (62 total) |
+
+### v2 data collection status
+
+| Dataset | Rows | v2 rows | SAFE | UNSAFE | Activate |
+|---------|------|---------|------|--------|----------|
+| Natural v3 (2026-06-19) | 696 | 696 | 696 | 0 | 77 |
+| Stratified v3 | PENDING | — | — | — | — |
+
+Engine commit for v3 data: `37026f3` (added `total_legal_moves` + `history_score`).
+
+### Next steps
+
+1. Stratified v3 collection (in progress)
+2. Feature-group sweep (P/L/PL/PLO/PLOB) — automatic when ≥30 v2 cal rows available
+3. Leave-one-out from best feature group
+4. Shadow validation on v1 artifact
+5. Fresh holdout collection (2000–5000 events, sealed until protocol frozen)
