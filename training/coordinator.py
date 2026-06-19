@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Localhost coordinator — single writer for manifest matchups + games DB.
 
+LEGACY WRITE PATH: inserts games into training/data/all_games.db.
+Requires TI_ALLOW_LEGACY_GAME_DB=1 when datagen guards are active.
+Import new games into the canonical store after pool runs:
+  python training/position_store.py import-legacy-games training/data/all_games.db
+
 Parallel match workers POST upserts here instead of fighting over manifest.json,
 .ingested_offset sidecars, or sqlite from many processes.
 

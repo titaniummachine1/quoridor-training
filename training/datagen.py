@@ -1,5 +1,10 @@
 """Training data pipeline for HalfPW retrain.
 
+LEGACY IMPORT TOOL ONLY for direct SQLite game DB writes.
+Do not use all_games.db as the active training database.
+Canonical source: training/data/canonical/position_store_v2.db
+New self-play games should land in binary shards and be ingested via position_store.py.
+
 STORAGE MODEL
 ─────────────
 Store only game sequences (moves + outcome) — not position snapshots.
@@ -634,6 +639,18 @@ def main():
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    writes_db = not args.stats and (
+        args.from_file or args.incremental or args.migrate_games or (not args.from_file and not args.incremental and not args.migrate_games)
+    )
+    if writes_db and out_path.suffix == ".db":
+        try:
+            from position_store_guards import assert_not_legacy_write
+
+            assert_not_legacy_write(out_path, context="datagen.py")
+        except Exception as e:
+            print(f"datagen blocked: {e}")
+            sys.exit(1)
 
     # ── stats ──
     if args.stats:

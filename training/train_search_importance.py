@@ -198,7 +198,15 @@ def main() -> int:
                     help="Explicitly allow zero labels after an external correlation study")
     args = ap.parse_args()
 
-    data_paths = args.data or ["training/data/search_pressure.jsonl"]
+    data_paths = args.data or ["training/data/exports/search_pressure_export.jsonl"]
+    for data_path in data_paths:
+        p = Path(data_path)
+        if str(p).replace("\\", "/") == "training/data/search_pressure.jsonl":
+            raise SystemExit(
+                "train_search_importance blocked: legacy search_pressure.jsonl.\n"
+                "Export from canonical store or pass --data with an export path.\n"
+                "See training/CANONICAL_DATASTORE.md"
+            )
     rows = []
     for data_path in data_paths:
         rows.extend(

@@ -88,6 +88,10 @@ ROOT    = Path(__file__).resolve().parent.parent
 WEIGHTS = ROOT / "engine" / "src" / "acev13" / "net_weights.bin"
 TRAINING_SCHEMA = "halfpw-sparse-route5-ws14-v1"
 
+from position_store_config import CANONICAL_DB
+from position_store_guards import LegacyTrainingSourceError, assert_canonical_training_db
+from position_store_lib import load_games_for_training
+
 # ── model ─────────────────────────────────────────────────────────────────────
 
 class HalfPW(nn.Module):
@@ -313,7 +317,7 @@ def load_checkpoint(path, model, optimizer, *, weights_path=WEIGHTS):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data",             default="training/data/all_games.db")
+    ap.add_argument("--data",             default=str(CANONICAL_DB))
     ap.add_argument("--weights",          default=str(WEIGHTS))
     ap.add_argument("--out-dir",          default="training/checkpoints")
     ap.add_argument("--epochs",           type=int,   default=20)
@@ -358,13 +362,34 @@ def main():
     # records via eval-batch here (single subprocess, all positions at once).
     print(f"Loading {args.data}...")
     data_path = Path(args.data)
+    try:
+        data_path = assert_canonical_training_db(data_path, context="train.py")
+    except LegacyTrainingSourceError as e:
+        print(f"Training blocked: {e}")
+        sys.exit(1)
     if data_path.suffix == ".db":
-        from datagen import load_games_from_db, load_games_by_ids, expand_games
-        if args.game_ids:
+        from datagen import load_games_by_ids, expand_games
+        import sqlite3
+
+        conn = sqlite3.connect(str(data_path))
+        has_canonical = bool(
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='game_paths'"
+            ).fetchone()
+        )
+        conn.close()
+        if has_canonical and load_games_for_training is not None:
+            games = load_games_for_training(data_path)
+            print(f"  {len(games)} games from canonical position store  ->  expanding via eval-batch...")
+        elif args.game_ids:
+            from datagen import load_games_from_db
+
             ids = [int(x.strip()) for x in args.game_ids.split(",") if x.strip()]
             games = load_games_by_ids(data_path, ids)
             print(f"  {len(games)} game(s) ids={ids}  ->  expanding via eval-batch...")
         else:
+            from datagen import load_games_from_db
+
             games = load_games_from_db(data_path)
             print(f"  {len(games)} games  ->  expanding positions via eval-batch...")
         records = expand_games(games, args.min_ply, args.max_ply, args.sample_rate)
