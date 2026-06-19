@@ -60,7 +60,14 @@ training/data/ka_bootstrap.err
 training/data/wallz_*
 training/data/position_store_reports/
 training/data/position_graph_compact_smoke*
+training/data/canonical/
+training/data/archive/
+training/data/smoke/
+training/data/exports/
+training/data/selfplay_shards/
 training/data/*flamegraph*
+training/data/titanium-v15-*.svg
+training/data/ti_wasm_like.svg
 training/data/handoff.txt
 training/data/text.txt
 training/data/parse_flamegraph.py
