@@ -1,10 +1,11 @@
 {
-  "last_train_game_count": 1435,
-  "last_trained_game_id": 1435,
-  "last_train_ts": 1781718318.485104,
-  "train_runs": 1032,
-  "games_trained": 1032,
-  "games_since_deploy": 155,
-  "last_deploy_ts": 1781676479.391753,
-  "deploy_runs": 5
+  "last_train_game_count": 1499,
+  "last_trained_game_id": 1500,
+  "last_train_ts": 1781838691.6110568,
+  "train_runs": 1100,
+  "games_trained": 1100,
+  "games_since_deploy": 0,
+  "last_deploy_ts": 1781838691.615057,
+  "deploy_runs": 8,
+  "training_schema": "halfpw-sparse-route5-ws14-v1"
 }
