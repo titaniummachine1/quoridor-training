@@ -95,9 +95,9 @@ It stores:
 - versioned labels
 - append-only shard imports
 
-Read [`POSITION_STORE_RUNBOOK.md`](POSITION_STORE_RUNBOOK.md) before doing a
-real migration. It includes the exact PowerShell commands, dry-run flow,
-current reject signatures, and smoke-validated storage numbers.
+Read [`CANONICAL_DATASTORE.md`](CANONICAL_DATASTORE.md) first — it defines the production
+database path, legacy policy, and authoritative commands. Then read
+[`POSITION_STORE_RUNBOOK.md`](POSITION_STORE_RUNBOOK.md) for import/migration details.
 
 ## Pre-Flight
 
