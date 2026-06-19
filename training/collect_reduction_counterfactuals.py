@@ -20,8 +20,10 @@ from engine_identity import assert_engine_ready  # noqa: E402
 from move_codec import pack_moves  # noqa: E402
 from reduction_counterfactual_schema import (  # noqa: E402
     FEATURE_SCHEMA,
+    FEATURE_SCHEMA_V2,
     SCHEMA,
     classify_pair,
+    rank_percentile,
     stable_partition,
 )
 
@@ -56,6 +58,7 @@ def run_probe(moves: list[str], depth: int, limit: int, target: int | None = Non
 
 
 def context_features(event: dict) -> list[float]:
+    """5-element context vector (context5 / FEATURE_SCHEMA v1)."""
     move = str(event["move"])
     return [
         min(max((int(event["depth"]) - 1) / 30.0, 0.0), 1.0),
@@ -63,6 +66,30 @@ def context_features(event: dict) -> list[float]:
         min(int(event["base_reduction"]) / 4.0, 1.0),
         1.0 if move.endswith("h") else 0.0,
         1.0 if move.endswith("v") else 0.0,
+    ]
+
+
+def context_features_v2(event: dict) -> list[float]:
+    """7-element context vector (context7 / FEATURE_SCHEMA v2).
+
+    Adds history_score (ordering confidence) and rank_percentile (branching context)
+    to the existing context5 features.
+    """
+    move = str(event["move"])
+    mi = int(event["move_index"])
+    n = int(event.get("total_legal_moves", 128))
+    raw_history = int(event.get("history_score", 0))
+    # history_score is an unbounded i32; soft-clip to [-10000, 10000] then normalise to [0,1].
+    history_norm = max(0.0, min(1.0, (raw_history + 10000) / 20000.0))
+    rp = rank_percentile(mi, n)
+    return [
+        min(max((int(event["depth"]) - 1) / 30.0, 0.0), 1.0),
+        min(mi / 128.0, 1.0),
+        min(int(event["base_reduction"]) / 4.0, 1.0),
+        1.0 if move.endswith("h") else 0.0,
+        1.0 if move.endswith("v") else 0.0,
+        history_norm,
+        rp,
     ]
 
 
@@ -160,9 +187,10 @@ def main() -> int:
                         "activate_plus_one": False,
                     }
                 move = str(baseline["move"])
+                has_v2_fields = "total_legal_moves" in baseline and "history_score" in baseline
                 row = {
                     "schema": SCHEMA,
-                    "feature_schema": FEATURE_SCHEMA,
+                    "feature_schema": FEATURE_SCHEMA_V2 if has_v2_fields else FEATURE_SCHEMA,
                     "moves_bin": base64.b64encode(pack_moves(moves)).decode("ascii"),
                     "source_game_key": game_key,
                     "source": source,
@@ -182,8 +210,15 @@ def main() -> int:
                     "legal_move_bucket": None,
                     "path_cutting": None,
                     "bottleneck": None,
+                    "total_legal_moves": baseline.get("total_legal_moves"),
+                    "history_score": baseline.get("history_score"),
+                    "rank_percentile": (
+                        rank_percentile(int(baseline["move_index"]), int(baseline["total_legal_moves"]))
+                        if has_v2_fields else None
+                    ),
                     "hidden32": baseline["hidden"],
                     "context5": context_features(baseline),
+                    "context7": context_features_v2(baseline) if has_v2_fields else None,
                     "baseline": baseline,
                     "counterfactual": counterfactual,
                     "baseline_root": baseline_root,

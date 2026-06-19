@@ -24,8 +24,10 @@ import torch.nn.functional as F
 
 from reduction_counterfactual_schema import (
     FEATURE_SCHEMA,
+    FEATURE_SCHEMA_V2,
     SCHEMA,
     SIDECAR_SCHEMA,
+    rank_percentile,
     validate_row,
     wilson_lower,
 )
@@ -44,16 +46,44 @@ THRESHOLD_GRID = [
     0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.90, 0.95, 0.99,
 ]
 
-# Model variant definitions
+# Stage-1 ablation variants (binary-format canonical width = 37)
 # A: hidden32 + context5 (37 total)
 # B: hidden32 + context4 (move_index removed → 36)
 # C: context5 only (5)
 # D: hidden32 only (32)
+#
+# Stage-2 feature-group variants (require v2 probe data with total_legal_moves / history_score)
+# P:       hidden32 only (32)                 — Group P
+# L:       context5 only (5)                  — Group L
+# PL:      hidden32 + context5 (37)           — Groups P+L  (= variant A)
+# PLO:     hidden32 + context5 + history (38) — Groups P+L+O
+# PLOB:    hidden32 + context5 + history + rank_pct (39) — Groups P+L+O+B
+#
+# Leave-one-out (starting from PLOB / PLO best):
+# PL_no_depth:    PL with remaining_depth zeroed
+# PL_no_midx:     PL with move_index zeroed (= variant B at 37 dims)
+# PL_no_red:      PL with base_reduction zeroed
 VARIANTS = {
-    "A": {"dims": 37, "use_hidden": True,  "use_context": True,  "zero_move_index": False},
-    "B": {"dims": 36, "use_hidden": True,  "use_context": True,  "zero_move_index": True},
-    "C": {"dims": 5,  "use_hidden": False, "use_context": True,  "zero_move_index": False},
-    "D": {"dims": 32, "use_hidden": True,  "use_context": False, "zero_move_index": False},
+    # Stage-1 ablation set
+    "A":  {"dims": 37, "use_hidden": True,  "context_src": "context5",
+           "zero_move_index": False, "pad_to": 37},
+    "B":  {"dims": 36, "use_hidden": True,  "context_src": "context5",
+           "zero_move_index": True,  "pad_to": 37},
+    "C":  {"dims": 5,  "use_hidden": False, "context_src": "context5",
+           "zero_move_index": False, "pad_to": 37},
+    "D":  {"dims": 32, "use_hidden": True,  "context_src": None,
+           "zero_move_index": False, "pad_to": 37},
+    # Stage-2 feature-group set (require v2 data)
+    "P":    {"dims": 32, "use_hidden": True,  "context_src": None,
+             "zero_move_index": False, "pad_to": None, "requires_v2": True},
+    "L":    {"dims": 5,  "use_hidden": False, "context_src": "context5",
+             "zero_move_index": False, "pad_to": None, "requires_v2": True},
+    "PL":   {"dims": 37, "use_hidden": True,  "context_src": "context5",
+             "zero_move_index": False, "pad_to": None, "requires_v2": True},
+    "PLO":  {"dims": 38, "use_hidden": True,  "context_src": "context5+history",
+             "zero_move_index": False, "pad_to": None, "requires_v2": True},
+    "PLOB": {"dims": 39, "use_hidden": True,  "context_src": "context5+history+rank",
+             "zero_move_index": False, "pad_to": None, "requires_v2": True},
 }
 
 
@@ -76,14 +106,18 @@ def integrity_check(natural_rows: list[dict], strat_rows: list[dict], trunk_sha:
     for i, row in enumerate(natural_rows + strat_rows):
         if row.get("schema") != SCHEMA:
             errors.append(f"schema mismatch row {i}")
-        if row.get("feature_schema") != FEATURE_SCHEMA:
-            errors.append(f"feature_schema mismatch row {i}")
+        fs = row.get("feature_schema")
+        if fs not in (FEATURE_SCHEMA, FEATURE_SCHEMA_V2):
+            errors.append(f"feature_schema mismatch row {i}: {fs!r}")
         h32 = row.get("hidden32", [])
         c5  = row.get("context5", [])
         if len(h32) != 32 or len(c5) != 5:
             errors.append(f"feature dim mismatch row {i}")
+        c7 = row.get("context7") or []
+        if c7 and len(c7) != 7:
+            errors.append(f"context7 dim mismatch row {i}: got {len(c7)}")
         if any(not isinstance(v, (int, float)) or v != v or v == float('inf') or v == float('-inf')
-               for v in h32 + c5):
+               for v in h32 + c5 + c7):
             errors.append(f"non-finite feature in row {i}")
         if row.get("sample_status") == "UNKNOWN":
             errors.append(f"UNKNOWN row must be excluded from supervised data, row {i}")
@@ -131,17 +165,36 @@ def get_features(row: dict, variant: str) -> list[float]:
     cfg = VARIANTS[variant]
     h32 = [float(v) for v in row["hidden32"]]
     c5  = [float(v) for v in row["context5"]]
-    if cfg["zero_move_index"]:
+
+    if cfg.get("zero_move_index"):
         c5 = [c5[0], 0.0, c5[2], c5[3], c5[4]]  # zero move_index (index 1)
-    parts = []
+
+    ctx_src = cfg.get("context_src")
+    parts: list[float] = []
+
     if cfg["use_hidden"]:
         parts.extend(h32)
-    if cfg["use_context"]:
-        if cfg["zero_move_index"]:
-            # drop the zeroed slot to get true 36-dim
+
+    if ctx_src == "context5":
+        if cfg.get("zero_move_index"):
+            # drop zeroed slot to get true 36-dim
             parts.extend([c5[0], c5[2], c5[3], c5[4]])
         else:
             parts.extend(c5)
+    elif ctx_src == "context5+history":
+        parts.extend(c5)
+        # history_score: soft-clip to [-10000,10000] then normalise to [0,1]
+        raw_h = int(row.get("history_score") or 0)
+        parts.append(max(0.0, min(1.0, (raw_h + 10000) / 20000.0)))
+    elif ctx_src == "context5+history+rank":
+        parts.extend(c5)
+        raw_h = int(row.get("history_score") or 0)
+        parts.append(max(0.0, min(1.0, (raw_h + 10000) / 20000.0)))
+        mi = int(row.get("move_index", 0))
+        n  = int(row.get("total_legal_moves") or 128)
+        parts.append(rank_percentile(mi, n))
+    # ctx_src == None: no context features appended
+
     assert len(parts) == cfg["dims"], f"variant {variant}: expected {cfg['dims']} got {len(parts)}"
     return parts
 
@@ -211,7 +264,14 @@ def select_threshold(probs: list[float], rows: list[dict]) -> tuple[float, dict]
         if n_unsafe > MAX_UNSAFE_CAL:
             continue  # safety constraint
         n_tp = sum(1 for _, r in activated if r["activate_plus_one"])
-        gross = sum(int(r.get("net_nodes_saved", 0)) for _, r in activated if r["activate_plus_one"])
+        # Signed economics: ALL activated events contribute their true delta.
+        # TPs save nodes; safe-FPs may contribute a small delta; UNSAFEs a large negative.
+        tp_delta = sum(int(r.get("net_nodes_saved", 0)) for _, r in activated if r["activate_plus_one"])
+        safe_fp_delta = sum(int(r.get("net_nodes_saved", 0)) for _, r in activated
+                            if r["sample_status"] == "SAFE" and not r["activate_plus_one"])
+        unsafe_delta = sum(int(r.get("net_nodes_saved", 0)) for _, r in activated
+                           if r["sample_status"] == "UNSAFE")
+        gross = tp_delta + safe_fp_delta + unsafe_delta
         inference_cost = INFERENCE_COST_NODES * n_act
         net = gross - inference_cost
         precision = n_tp / n_act if n_act else 0.0
@@ -226,6 +286,9 @@ def select_threshold(probs: list[float], rows: list[dict]) -> tuple[float, dict]
             "precision": round(precision, 4),
             "wilson_lower_95": round(wl, 4),
             "recall": round(recall, 4),
+            "tp_delta": tp_delta,
+            "safe_fp_delta": safe_fp_delta,
+            "unsafe_delta": unsafe_delta,
             "gross_nodes_saved": gross,
             "inference_cost_nodes": round(inference_cost, 2),
             "net_nodes_saved": round(net, 2),
@@ -254,11 +317,15 @@ def evaluate_at_threshold(
     n_act = int(active_mask.sum())
     n_tp = int(((y > 0.5) & active_mask).sum())
     n_unsafe_act = int((is_unsafe.bool() & active_mask).sum())
-    gross = sum(
-        int(r.get("net_nodes_saved", 0))
-        for r, a in zip(rows, active_mask.tolist())
-        if a and r["activate_plus_one"]
-    )
+    active_list = active_mask.tolist()
+    # Signed economics: ALL activated events contribute their true signed delta.
+    tp_delta = sum(int(r.get("net_nodes_saved", 0)) for r, a in zip(rows, active_list)
+                   if a and r["activate_plus_one"])
+    safe_fp_delta = sum(int(r.get("net_nodes_saved", 0)) for r, a in zip(rows, active_list)
+                        if a and r["sample_status"] == "SAFE" and not r["activate_plus_one"])
+    unsafe_delta = sum(int(r.get("net_nodes_saved", 0)) for r, a in zip(rows, active_list)
+                       if a and r["sample_status"] == "UNSAFE")
+    gross = tp_delta + safe_fp_delta + unsafe_delta
     inference_cost = INFERENCE_COST_NODES * n_act
     net = gross - inference_cost
     total_pos = int(y.sum())
@@ -272,6 +339,9 @@ def evaluate_at_threshold(
         "precision": round(n_tp / n_act, 4) if n_act else 0.0,
         "precision_wilson_lower_95": round(wilson_lower(n_tp, n_act), 4),
         "recall": round(n_tp / max(1, total_pos), 4),
+        "tp_delta": tp_delta,
+        "safe_fp_delta": safe_fp_delta,
+        "unsafe_delta": unsafe_delta,
         "gross_nodes_saved": gross,
         "inference_cost_nodes": round(inference_cost, 2),
         "net_nodes_saved": round(net, 2),
@@ -297,7 +367,13 @@ def full_threshold_sweep(
         n_act = sum(active_mask)
         n_tp = sum(a and r["activate_plus_one"] for a, r in zip(active_mask, rows))
         n_unsafe_act = sum(a and r["sample_status"] == "UNSAFE" for a, r in zip(active_mask, rows))
-        gross = sum(int(r.get("net_nodes_saved", 0)) for a, r in zip(active_mask, rows) if a and r["activate_plus_one"])
+        tp_delta = sum(int(r.get("net_nodes_saved", 0)) for a, r in zip(active_mask, rows)
+                       if a and r["activate_plus_one"])
+        safe_fp_delta = sum(int(r.get("net_nodes_saved", 0)) for a, r in zip(active_mask, rows)
+                            if a and r["sample_status"] == "SAFE" and not r["activate_plus_one"])
+        unsafe_delta = sum(int(r.get("net_nodes_saved", 0)) for a, r in zip(active_mask, rows)
+                           if a and r["sample_status"] == "UNSAFE")
+        gross = tp_delta + safe_fp_delta + unsafe_delta
         net = gross - INFERENCE_COST_NODES * n_act
         results.append({
             "threshold": t,
@@ -307,6 +383,9 @@ def full_threshold_sweep(
             "precision": round(n_tp / n_act, 4) if n_act else 0.0,
             "wilson_lower_95": round(wilson_lower(n_tp, n_act), 4),
             "recall": round(n_tp / max(1, total_pos), 4),
+            "tp_delta": tp_delta,
+            "safe_fp_delta": safe_fp_delta,
+            "unsafe_delta": unsafe_delta,
             "gross_nodes_saved": gross,
             "net_nodes_saved": round(net, 2),
             "activation_rate": round(n_act / max(1, len(rows)), 4),
@@ -370,7 +449,19 @@ INPUTS_CANONICAL = 37
 
 def write_binary(path: Path, model: nn.Linear, variant: str, trunk_hash: str,
                  scale: float, shift: float, threshold: float) -> tuple[str, str]:
-    dims = VARIANTS[variant]["dims"]
+    """Write canonical 37-input binary artifact.
+
+    Stage-1 ablation variants (A/B/C/D) are padded to 37.
+    Stage-2 feature-group variants with pad_to=None cannot be serialised to
+    the 37-input format and must not call this function.
+    """
+    cfg = VARIANTS[variant]
+    if cfg.get("pad_to") is None:
+        raise ValueError(
+            f"variant {variant!r} has pad_to=None; binary format requires 37 inputs. "
+            "Extend loader before writing artifact for this variant."
+        )
+    dims = cfg["dims"]
     weights_vec = model.weight.detach().cpu().double().flatten().tolist()
     bias = float(model.bias.detach().cpu())
 
@@ -769,9 +860,46 @@ def main() -> int:
         lr=args.lr,
     )
 
+    # === Coefficient inspection (frozen model) ===
+    print(f"\n=== Coefficient inspection (frozen seed={best_seed}) ===")
+    w_frozen = model_frozen.weight.detach().cpu().flatten().tolist()
+    b_frozen = float(model_frozen.bias.detach().cpu())
+    h32_w = w_frozen[:32]
+    c5_w  = w_frozen[32:]
+    c5_names = ["remaining_depth", "move_index", "base_reduction", "is_horizontal", "is_vertical"]
+    print(f"  bias={b_frozen:.4f}  (Platt: scale={scale_frozen:.4f} shift={shift_frozen:.4f})")
+    print(f"  hidden32 weight norm={sum(x**2 for x in h32_w)**0.5:.4f}  "
+          f"max={max(abs(x) for x in h32_w):.4f}  "
+          f"mean_abs={sum(abs(x) for x in h32_w)/32:.4f}")
+    print("  context5 weights:")
+    for name, wt in zip(c5_names, c5_w):
+        print(f"    {name:<22} {wt:+.6f}")
+
+    # Per-seed coefficient variance
+    A_best_config_runs_coeff = [
+        r for r in A_results
+        if r["ratio_nat"] == frozen_config["ratio_nat"]
+        and r["neg_weight"] == frozen_config["neg_weight"]
+        and r["unsafe_weight"] == frozen_config["unsafe_weight"]
+    ]
+    per_seed_coeff: list[list[float]] = []
+    for r in A_best_config_runs_coeff:
+        dims = VARIANTS["A"]["dims"]
+        m_ = nn.Linear(dims, 1)
+        m_.load_state_dict(r["_model_state"])
+        per_seed_coeff.append(m_.weight.detach().cpu().flatten().tolist())
+    if per_seed_coeff:
+        import statistics as _stat
+        print(f"\n  Context5 weight variance across {len(per_seed_coeff)} seeds:")
+        for j, name in enumerate(c5_names):
+            vals = [wv[32 + j] for wv in per_seed_coeff]
+            print(f"    {name:<22} mean={_stat.mean(vals):+.4f}  "
+                  f"stdev={_stat.stdev(vals):.4f}  "
+                  f"min={min(vals):+.4f}  max={max(vals):+.4f}")
+
     # Full calibration threshold sweep for reporting
     cal_sweep = full_threshold_sweep(model_frozen, nat_cal, scale_frozen, shift_frozen, "A")
-    print("  Calibration threshold sweep:")
+    print("\n  Calibration threshold sweep:")
     print(f"  {'thr':6} {'act':5} {'tp':5} {'unsafe':7} {'prec':7} {'wl95':7} "
           f"{'gross':7} {'net':7} {'act_rate':9}")
     for row in cal_sweep:
@@ -828,21 +956,72 @@ def main() -> int:
         return 1
     print(f"  Trunk freeze: unchanged ({trunk_sha[:16]}...)")
 
-    # === Ablation results (final test at frozen threshold) ===
-    print("\n=== Ablation final-test metrics (frozen threshold) ===")
+    # === Always-on baseline ===
+    # Apply +1 to every eligible event: gross = sum of all net_nodes_saved, inference on all rows.
+    always_on_tp_delta = sum(int(r.get("net_nodes_saved", 0)) for r in nat_test if r["activate_plus_one"])
+    always_on_safe_fp_delta = sum(int(r.get("net_nodes_saved", 0)) for r in nat_test
+                                   if r["sample_status"] == "SAFE" and not r["activate_plus_one"])
+    always_on_unsafe_delta = sum(int(r.get("net_nodes_saved", 0)) for r in nat_test
+                                  if r["sample_status"] == "UNSAFE")
+    always_on_gross = always_on_tp_delta + always_on_safe_fp_delta + always_on_unsafe_delta
+    always_on_net = always_on_gross - INFERENCE_COST_NODES * len(nat_test)
+    always_on_n_unsafe = sum(1 for r in nat_test if r["sample_status"] == "UNSAFE")
+    print(f"\n=== Always-on baseline (activate every eligible event) ===")
+    print(f"  rows={len(nat_test)} unsafe={always_on_n_unsafe}")
+    print(f"  tp_delta={always_on_tp_delta} safe_fp_delta={always_on_safe_fp_delta} "
+          f"unsafe_delta={always_on_unsafe_delta}")
+    print(f"  gross={always_on_gross} inference_cost={INFERENCE_COST_NODES*len(nat_test):.1f} "
+          f"net={always_on_net:.2f}")
+    always_on_verdict = "GO" if always_on_net > 0 and always_on_n_unsafe == 0 else "NO-GO"
+    print(f"  Always-on verdict: {always_on_verdict}")
+
+    # === Handcrafted rule baselines (test set) ===
+    def rule_baseline(rows: list[dict], pred_fn) -> dict:
+        n = len(rows)
+        tp = sum(1 for r in rows if pred_fn(r) and r["activate_plus_one"])
+        n_act = sum(1 for r in rows if pred_fn(r))
+        n_unsafe = sum(1 for r in rows if pred_fn(r) and r["sample_status"] == "UNSAFE")
+        tp_d = sum(int(r.get("net_nodes_saved", 0)) for r in rows if pred_fn(r) and r["activate_plus_one"])
+        sfp_d = sum(int(r.get("net_nodes_saved", 0)) for r in rows
+                    if pred_fn(r) and r["sample_status"] == "SAFE" and not r["activate_plus_one"])
+        u_d = sum(int(r.get("net_nodes_saved", 0)) for r in rows
+                  if pred_fn(r) and r["sample_status"] == "UNSAFE")
+        gross = tp_d + sfp_d + u_d
+        net = gross - INFERENCE_COST_NODES * n_act
+        return {"activations": n_act, "true_positives": tp, "unsafe": n_unsafe,
+                "tp_delta": tp_d, "safe_fp_delta": sfp_d, "unsafe_delta": u_d,
+                "gross": gross, "net": round(net, 2),
+                "precision": round(tp / n_act, 4) if n_act else 0.0}
+
+    print(f"\n=== Handcrafted rule baselines (test set) ===")
+    rules = {
+        "mi>=12_d>=6": lambda r: int(r["move_index"]) >= 12 and int(r["depth"]) >= 6,
+        "mi>=24_d>=6": lambda r: int(r["move_index"]) >= 24 and int(r["depth"]) >= 6,
+        "red>=2":      lambda r: int(r["base_reduction"]) >= 2,
+        "red==3":      lambda r: int(r["base_reduction"]) == 3,
+        "mi>=32":      lambda r: int(r["move_index"]) >= 32,
+    }
+    for name, pred in rules.items():
+        rb = rule_baseline(nat_test, pred)
+        print(f"  {name:<20} act={rb['activations']:3d} tp={rb['true_positives']:3d} "
+              f"unsafe={rb['unsafe']:2d} net={rb['net']:7.2f} prec={rb['precision']:.4f}")
+
+    # === Ablation results (each variant uses ITS OWN calibrated threshold — fair comparison) ===
+    print("\n=== Ablation final-test metrics (per-variant independent threshold) ===")
     abl_test_results = {}
     for var in ("A", "B", "C", "D"):
-        # Use same config but appropriate seed
         best_var = select_best(ablation_results[var])
         dims = VARIANTS[var]["dims"]
         torch.manual_seed(best_var["seed"])
         m_abl = nn.Linear(dims, 1)
         m_abl.load_state_dict(best_var["_model_state"])
+        # Use each variant's own independently calibrated threshold, not threshold_frozen.
+        own_thr = best_var["threshold"]
         abl_test = evaluate_at_threshold(
             m_abl, nat_test,
-            best_var["scale"], best_var["shift"], threshold_frozen, var)
+            best_var["scale"], best_var["shift"], own_thr, var)
         abl_test_results[var] = abl_test
-        print(f"  {var}: act={abl_test['activations']} tp={abl_test['true_positives']} "
+        print(f"  {var} (thr={own_thr}): act={abl_test['activations']} tp={abl_test['true_positives']} "
               f"unsafe={abl_test['unsafe_activations']} "
               f"net={abl_test['net_nodes_saved']:.2f} prec={abl_test['precision']:.4f}")
 
@@ -872,7 +1051,8 @@ def main() -> int:
 
     abl_csv = out_dir / "ablation_metrics.csv"
     with abl_csv.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["variant", "seed", "cal_net_saved", "test_net_saved",
+        w = csv.DictWriter(f, fieldnames=["variant", "seed", "own_threshold",
+                                           "cal_net_saved", "test_net_saved",
                                            "test_activations", "test_unsafe"])
         w.writeheader()
         for var, runs in ablation_results.items():
@@ -880,10 +1060,13 @@ def main() -> int:
                 dims = VARIANTS[var]["dims"]
                 m_ = nn.Linear(dims, 1)
                 m_.load_state_dict(r["_model_state"])
-                te = evaluate_at_threshold(m_, nat_test, r["scale"], r["shift"], threshold_frozen, var)
+                # Each variant evaluated at its own calibrated threshold (fair comparison).
+                own_thr = r["threshold"]
+                te = evaluate_at_threshold(m_, nat_test, r["scale"], r["shift"], own_thr, var)
                 w.writerow({
                     "variant": var,
                     "seed": r["seed"],
+                    "own_threshold": own_thr,
                     "cal_net_saved": r["cal_selection_stats"].get("net_nodes_saved", 0),
                     "test_net_saved": te["net_nodes_saved"],
                     "test_activations": te["activations"],
@@ -892,6 +1075,61 @@ def main() -> int:
 
     cal_sweep_path = out_dir / "cal_threshold_sweep.json"
     cal_sweep_path.write_text(json.dumps(cal_sweep, indent=2), encoding="utf-8")
+
+    # === Feature-group sweep (Stage-2, requires v2 probe data) ===
+    # v2 data has feature_schema == FEATURE_SCHEMA_V2 and carries history_score + total_legal_moves.
+    v2_nat_train = [r for r in nat_train if r.get("feature_schema") == FEATURE_SCHEMA_V2]
+    v2_nat_cal   = [r for r in nat_cal   if r.get("feature_schema") == FEATURE_SCHEMA_V2]
+    v2_nat_test  = [r for r in nat_test  if r.get("feature_schema") == FEATURE_SCHEMA_V2]
+    fg_results: dict[str, list[dict]] = {}
+    if len(v2_nat_cal) >= 30:
+        print(f"\n=== Feature-group sweep (v2 data: {len(v2_nat_train)} train / "
+              f"{len(v2_nat_cal)} cal / {len(v2_nat_test)} test) ===")
+        v2_strat_train = [r for r in strat_train if r.get("feature_schema") == FEATURE_SCHEMA_V2]
+        for fg_var in ("P", "L", "PL", "PLO", "PLOB"):
+            print(f"  Feature group {fg_var}...")
+            fg_res = run_sweep(
+                v2_nat_train, v2_nat_cal, v2_nat_test, v2_strat_train, trunk_sha,
+                variant=fg_var,
+                mixing_ratios=[frozen_config["ratio_nat"]],
+                neg_weights=[frozen_config["neg_weight"]],
+                unsafe_weights=[frozen_config["unsafe_weight"]],
+                seeds=SEEDS,
+                epochs=args.epochs,
+                lr=args.lr,
+                label=fg_var,
+            )
+            fg_results[fg_var] = fg_res
+
+        import statistics as _stat2
+        print(f"\n=== Feature-group summary (calibration, independently calibrated thresholds) ===")
+        for fg_var, fg_res in fg_results.items():
+            nets = [r["cal_selection_stats"].get("net_nodes_saved", 0) for r in fg_res
+                    if r["cal_selection_stats"].get("unsafe_activations", 1) == 0]
+            thrs = [r["threshold"] for r in fg_res]
+            feasible = sum(1 for n in nets if n > 0)
+            med = _stat2.median(nets) if nets else float("nan")
+            med_thr = _stat2.median(thrs) if thrs else float("nan")
+            print(f"  {fg_var:<6} median_cal_net={med:.1f}  med_threshold={med_thr:.3f}  "
+                  f"feasible={feasible}/{len(fg_res)}")
+
+        if v2_nat_test:
+            print(f"\n=== Feature-group test evaluation (per-variant independent threshold) ===")
+            for fg_var, fg_res in fg_results.items():
+                best_fg = select_best(fg_res)
+                dims = VARIANTS[fg_var]["dims"]
+                m_fg = nn.Linear(dims, 1)
+                m_fg.load_state_dict(best_fg["_model_state"])
+                te_fg = evaluate_at_threshold(
+                    m_fg, v2_nat_test,
+                    best_fg["scale"], best_fg["shift"], best_fg["threshold"], fg_var)
+                print(f"  {fg_var:<6} thr={best_fg['threshold']} "
+                      f"act={te_fg['activations']} tp={te_fg['true_positives']} "
+                      f"unsafe={te_fg['unsafe_activations']} "
+                      f"net={te_fg['net_nodes_saved']:.2f} prec={te_fg['precision']:.4f}")
+    else:
+        print(f"\n[feature-group sweep skipped: only {len(v2_nat_cal)} v2 cal rows "
+              f"(need >=30); recollect data with new engine build first]")
 
     final_report = {
         "trunk_sha256": trunk_sha,
@@ -908,6 +1146,13 @@ def main() -> int:
         "final_test_sweep": test_sweep,
         "final_test_verdict": verdict,
         "ablation_test_results": abl_test_results,
+        "always_on_baseline": {
+            "net": always_on_net, "gross": always_on_gross,
+            "unsafe_activations": always_on_n_unsafe, "verdict": always_on_verdict,
+        },
+        "feature_group_results": {
+            k: select_best(v)["cal_selection_stats"] for k, v in fg_results.items()
+        } if fg_results else {},
         "unsafe_natural_cases": nat_unsafe_cases,
         "unsafe_stratified_count": len(strat_unsafe),
         "artifact_path": str(artifact_path),

@@ -7,6 +7,8 @@ import math
 
 SCHEMA = "titanium-reduction-counterfactual-v1"
 FEATURE_SCHEMA = "halfpw-hidden32-search-context5-v1"
+# v2 adds total_legal_moves, history_score, and rank_percentile to the probe event and context
+FEATURE_SCHEMA_V2 = "halfpw-hidden32-search-context7-v2"
 SIDECAR_SCHEMA = "titanium-reduction-sidecar-v1"
 STATUSES = {"SAFE", "UNSAFE", "UNKNOWN"}
 
@@ -98,6 +100,15 @@ def classify_pair(
         "net_nodes_saved": net_nodes_saved,
         "net_savings_ratio": net_savings_ratio,
     }
+
+
+def rank_percentile(move_index: int, total_legal_moves: int) -> float:
+    """Soft ordering-rank feature: position of this move in the ordered list.
+
+    0.0 = first move tried, 1.0 = last move tried.
+    Costs nothing extra if total_legal_moves is already available.
+    """
+    return move_index / max(total_legal_moves - 1, 1)
 
 
 def stable_partition(game_key: str, seed: int) -> str:
