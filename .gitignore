@@ -104,6 +104,7 @@ training/data/teacher_dataset_rollback_*/
 training/runs/
 dist/
 .cleanup_quarantine/
+docs/maintenance/repository_inventory.json
 # DuckDB write-ahead log and temporary files (task 10)
 training/data/*.duckdb
 training/data/*.duckdb.wal
