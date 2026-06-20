@@ -233,7 +233,13 @@ def test_build_teacher_dataset_manifest_structure(tmp_path: Path) -> None:
     conn.close()
 
     out_dir = tmp_path / "candidate"
-    manifest = build_teacher_dataset(output_dir=out_dir, sqlite_db=db)
+    manifest = build_teacher_dataset(
+        output_dir=out_dir,
+        sqlite_db=db,
+        root=tmp_path,
+        _sidecar_index={},
+        _jsonl_by_packed={},
+    )
 
     assert (out_dir / "manifest.json").exists(), "manifest.json must exist after build"
     assert (out_dir / "schema.json").exists(), "schema.json must exist after build"

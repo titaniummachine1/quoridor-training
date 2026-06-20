@@ -118,12 +118,37 @@ def cmd_verify_candidate(args) -> int:
         issues.append(f"partial files remain: {partial_files}")
 
     counts = manifest.get("counts", {})
-    gate_status = {
-        "promotion_allowed": manifest.get("promotion_allowed", False),
-        "engine_parity_verified": manifest.get("engine_parity_verified", False),
-        "cross_language_position_parity": manifest.get("cross_language_position_parity", False),
-    }
-    unresolved = manifest.get("policy_resolution", {}).get("unresolved", 0)
+    # Support both old flat gate fields and new nested promotion_gates.
+    raw_gates = manifest.get("promotion_gates") or {}
+    # Merge legacy flat keys if present.
+    for legacy_key, new_key in [
+        ("engine_parity_verified", "engine_move_gen_parity_verified"),
+        ("cross_language_position_parity", "cross_language_position_parity"),
+        ("canonical_hash_parity", "canonical_hash_parity"),
+    ]:
+        if legacy_key in manifest and new_key not in raw_gates:
+            raw_gates.setdefault(new_key, manifest[legacy_key])
+
+    REQUIRED_GATES = [
+        "cross_language_position_parity",
+        "canonical_hash_parity",
+        "semantic_parity_passed",
+        "policy_payload_audit_passed",
+        "duckdb_catalog_audit_passed",
+        "concurrent_reader_test_passed",
+        "value_loader_smoke_passed",
+        "policy_loader_smoke_passed",
+        "all_required_tests_passed",
+    ]
+    gate_status = {g: bool(raw_gates.get(g, False)) for g in REQUIRED_GATES}
+    quarantined = counts.get("policy_quarantined", -1)
+    if quarantined != 0:
+        issues.append(f"policy_quarantined={quarantined} (must be 0)")
+    for gate, passed in gate_status.items():
+        if not passed:
+            issues.append(f"gate_not_passed:{gate}")
+
+    unresolved = manifest.get("policy_resolution", {}).get("unresolved", 0) or manifest.get("policy_resolution", {}).get("v8_still_unresolved", 0)
     if unresolved:
         issues.append(f"unresolved_policies={unresolved}")
 
@@ -136,9 +161,13 @@ def cmd_verify_candidate(args) -> int:
         "created_at": manifest.get("created_at"),
         "counts": counts,
         "gate_status": gate_status,
+        "engine_gate_separate": {
+            "engine_move_gen_parity_verified": bool(raw_gates.get("engine_move_gen_parity_verified", False)),
+            "note": "Engine move-gen parity blocks engine deployment, not teacher dataset promotion",
+        },
         "policy_resolution": manifest.get("policy_resolution", {}),
         "issues": issues,
-        "ready_for_promotion": len(issues) == 0 and gate_status["engine_parity_verified"],
+        "ready_for_promotion": len(issues) == 0,
     }
     print(json.dumps(result, indent=2))
     return 0 if not issues else 1

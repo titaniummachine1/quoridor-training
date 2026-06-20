@@ -46,6 +46,8 @@ def build_teacher_dataset(
     root: Path = ROOT,
     compression: str = "zstd",
     batch_size: int = 100_000,
+    _sidecar_index: dict | None = None,
+    _jsonl_by_packed: dict | None = None,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     paths = _dataset_paths(output_dir)
@@ -53,8 +55,14 @@ def build_teacher_dataset(
         d.mkdir(parents=True, exist_ok=True)
 
     policy_audit = audit_teacher_policies(sqlite_db, root=root, verify_payloads=False)
-    sidecar_index, skipped_sidecars = build_sidecar_policy_index()
-    _jsonl_canonical, jsonl_by_packed = build_jsonl_policy_index()
+    if _sidecar_index is None:
+        sidecar_index, skipped_sidecars = build_sidecar_policy_index()
+    else:
+        sidecar_index, skipped_sidecars = _sidecar_index, 0
+    if _jsonl_by_packed is None:
+        _jsonl_canonical, jsonl_by_packed = build_jsonl_policy_index()
+    else:
+        jsonl_by_packed = _jsonl_by_packed
     lookup_stats = PolicyLookupStats()
 
     conn = sqlite3.connect(sqlite_db)
@@ -202,16 +210,44 @@ def build_teacher_dataset(
     elapsed = time.perf_counter() - t0
     manifest_path = output_dir / "manifest.json"
     schema_path = output_dir / "schema.json"
+    # All promotion gates default to False at build time.
+    # Each gate must be set to True by a separate post-build verification step.
+    # promotion_allowed becomes True only when ALL required gates are True AND
+    # policy_quarantined == 0.  The build itself never sets promotion_allowed=True.
+    promotion_gates = {
+        # Teacher dataset position codec parity (packed_state + canonical_hash).
+        # Verified by: python training/train.py audit-position-parity
+        "cross_language_position_parity": False,
+        "canonical_hash_parity": False,
+        # Policy semantic hash round-trip: policy_semantic_hash(Rust) == policy_semantic_hash(Python).
+        "semantic_parity_passed": False,
+        # Per-payload CRC and index integrity on every policy record.
+        "policy_payload_audit_passed": False,
+        # DuckDB catalog builds without error; count(*) matches manifest.
+        "duckdb_catalog_audit_passed": False,
+        # Two concurrent DuckDB readers on the same Parquet file return identical rows.
+        "concurrent_reader_test_passed": False,
+        # Smoke: load 1 row from labels Parquet, read value_i16, no exception.
+        "value_loader_smoke_passed": False,
+        # Smoke: load 1 row with policy_record_id, read_policy_chunk succeeds.
+        "policy_loader_smoke_passed": False,
+        # All pytest tests in training/test_teacher_dataset.py pass.
+        "all_required_tests_passed": False,
+        # Separate from teacher dataset: Rust engine legal-move / apply-move parity
+        # vs the reference JS engine.  Blocks engine deployment, not teacher promotion.
+        "engine_move_gen_parity_verified": False,
+    }
+
     manifest = {
         "schema_version": TEACHER_DATASET_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_sqlite": str(sqlite_db),
         "teacher_dataset_status": "candidate",
+        # promotion_allowed is a derived field; recomputed from gates on every write.
         "promotion_allowed": False,
-        "engine_parity_verified": False,
-        "cross_language_position_parity": False,
         "immutable": True,
         "compression": compression,
+        "promotion_gates": promotion_gates,
         "canonical_identity_spec": spec_document(),
         "counts": {
             "positions": len(pos_rows),
@@ -266,8 +302,4 @@ def build_teacher_dataset(
         ),
         encoding="utf-8",
     )
-    if lookup_stats.unresolved:
-        manifest["promotion_blocked_reason"] = (
-            f"unresolved_policies={lookup_stats.unresolved} quarantine={len(quarantine_rows)}"
-        )
     return manifest

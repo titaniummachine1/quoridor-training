@@ -91,8 +91,13 @@ training/_stats_tmp.py
 training/_progress.py
 training/_breakdown.py
 training/_v8_recovery.py
+training/_jsonl_miss_audit.py
+training/_v9_finalize.py
+training/_test_manifest_direct.py
 training/data/teacher_dataset_candidate_v8/
 training/data/teacher_dataset_candidate_v8.partial/
+training/data/teacher_dataset_candidate_v9/
+training/data/teacher_dataset_candidate_v9.partial/
 # DuckDB write-ahead log and temporary files (task 10)
 training/data/*.duckdb
 training/data/*.duckdb.wal
