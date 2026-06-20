@@ -61,7 +61,7 @@ def test_move_prefix_vs_packed_eval_equivalence() -> None:
     from titanium_training.data.eval_packed import eval_packed_batch
     from titanium_training.store.state import PositionState
 
-    # Positions replayed through standard Ace algebraic (same physical board as Python pack).
+    # Positions replayed through standard algebraic move lists (same physical board as Python pack).
     moves_list = [
         [],
         ["e2", "e8", "e3", "e7", "d3h", "f5v"],
@@ -69,7 +69,7 @@ def test_move_prefix_vs_packed_eval_equivalence() -> None:
     ]
     for moves in moves_list:
         prefix_eval = eval_batch([moves])[0]
-        # Reconstruct Python packed state from Ace eval geometry (inverse of packed decode map).
+        # Reconstruct Python packed state from Titanium eval geometry (inverse of packed decode map).
         packed = bytearray(24)
         packed[0] = 1
         packed[1] = prefix_eval["pawn1"]
