@@ -4,7 +4,8 @@ from __future__ import annotations
 import hashlib
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from .schema import POLICY_CHUNK_MAGIC, POLICY_INDEX_MAGIC, POLICY_SIDECAR_SCHEMA_VERSION
 
@@ -32,10 +33,42 @@ class EncodedPolicy:
         return header + body
 
 
+def read_policy_chunk(bin_path: Path, idx_path: Path, record_id: int) -> EncodedPolicy:
+    """Read one encoded policy record from finalized chunk files."""
+    idx_data = idx_path.read_bytes()
+    if not idx_data.startswith(POLICY_INDEX_MAGIC):
+        raise ValueError("bad policy index magic")
+    count = struct.unpack_from("<H", idx_data, 8)[0]
+    if record_id < 0 or record_id >= count:
+        raise IndexError(f"policy record_id out of range: {record_id}")
+    header_size = len(POLICY_INDEX_MAGIC) + struct.calcsize("<HI")
+    entry_size = struct.calcsize("<IQII32s")
+    entry_off = header_size + record_id * entry_size
+    rid, payload_off, payload_len, crc, content_hash = struct.unpack_from("<IQII32s", idx_data, entry_off)
+    if rid != record_id:
+        raise ValueError(f"index rid mismatch: {rid} != {record_id}")
+    blob = bin_path.read_bytes()
+    payload = blob[payload_off : payload_off + payload_len]
+    if (zlib.crc32(payload) & 0xFFFFFFFF) != crc:
+        raise ValueError("policy payload crc mismatch")
+    n_moves, enc = struct.unpack_from("<BB", payload, 0)
+    if enc != 1:
+        raise ValueError(f"unsupported policy encoding: {enc}")
+    move_codes: list[int] = []
+    values_u16: list[int] = []
+    pos = 2
+    for _ in range(n_moves):
+        mv, q = struct.unpack_from("<BH", payload, pos)
+        move_codes.append(mv)
+        values_u16.append(q)
+        pos += 3
+    return EncodedPolicy(tuple(move_codes), tuple(values_u16), content_hash)
+
+
 @dataclass
 class PolicyChunkWriter:
-    chunk_id: int
-    records: list[tuple[int, bytes, bytes]]  # policy_record_id placeholder, encoded, content_hash
+    chunk_id: int = 0
+    records: list[tuple[int, bytes, bytes]] = field(default_factory=list)
 
     def add(self, encoded: EncodedPolicy) -> int:
         rid = len(self.records)

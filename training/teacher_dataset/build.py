@@ -1,4 +1,4 @@
-"""Build immutable Parquet teacher dataset from SQLite reference + repaired policies."""
+"""Build immutable Parquet teacher dataset — candidate output only until parity gates pass."""
 from __future__ import annotations
 
 import hashlib
@@ -12,34 +12,35 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from position_store_config import ROOT, TEACHER_SIDECARS, TEACHER_STORE_DB
+from position_store_config import ROOT, TEACHER_STORE_DB
 
 from .audit_policies import audit_teacher_policies
-from .config import (
-    LABELS_DIR,
-    OBSERVATIONS_DIR,
-    POLICIES_DIR,
-    POSITIONS_DIR,
-    REJECTS_DIR,
-    TEACHER_DATASET_DIR,
-    TEACHER_DATASET_MANIFEST,
-    TEACHER_DATASET_SCHEMA,
-)
-from .policy_binary import EncodedPolicy, PolicyChunkWriter
+from .canonical_identity import spec_document
+from .config import TEACHER_DATASET_CANDIDATE_DIR
 from .jsonl_policy_index import build_jsonl_policy_index
-from .schema import (
-    LABEL_TYPE_TO_TARGET_KIND,
-    TEACHER_DATASET_SCHEMA_VERSION,
-    TARGET_OTHER,
-)
+from .policy_binary import EncodedPolicy, PolicyChunkWriter
+from .policy_lookup import PolicyLookupStats, lookup_teacher_policy
+from .schema import LABEL_TYPE_TO_TARGET_KIND, TEACHER_DATASET_SCHEMA_VERSION, TARGET_OTHER
+from .sidecar_policy_index import build_sidecar_policy_index
 
 
 def _position_key(canonical_hash: bytes, packed_state: bytes) -> bytes:
     return hashlib.blake2b(canonical_hash + packed_state, digest_size=16).digest()
 
 
+def _dataset_paths(output_dir: Path) -> dict[str, Path]:
+    return {
+        "positions": output_dir / "positions",
+        "labels": output_dir / "labels",
+        "observations": output_dir / "observations",
+        "policies": output_dir / "policies",
+        "rejects": output_dir / "rejects",
+        "reports": output_dir / "reports",
+    }
+
+
 def build_teacher_dataset(
-    output_dir: Path = TEACHER_DATASET_DIR,
+    output_dir: Path = TEACHER_DATASET_CANDIDATE_DIR,
     *,
     sqlite_db: Path = TEACHER_STORE_DB,
     root: Path = ROOT,
@@ -47,25 +48,31 @@ def build_teacher_dataset(
     batch_size: int = 100_000,
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
-    for d in (output_dir, POSITIONS_DIR, LABELS_DIR, OBSERVATIONS_DIR, POLICIES_DIR, REJECTS_DIR, output_dir / "reports"):
+    paths = _dataset_paths(output_dir)
+    for d in paths.values():
         d.mkdir(parents=True, exist_ok=True)
 
     policy_audit = audit_teacher_policies(sqlite_db, root=root, verify_payloads=False)
-    jsonl_index = build_jsonl_policy_index()
+    sidecar_index, skipped_sidecars = build_sidecar_policy_index()
+    _jsonl_canonical, jsonl_by_packed = build_jsonl_policy_index()
+    lookup_stats = PolicyLookupStats()
 
     conn = sqlite3.connect(sqlite_db)
     conn.row_factory = sqlite3.Row
 
     pos_rows: list[dict[str, Any]] = []
     pos_id_to_key: dict[int, bytes] = {}
+    pos_id_to_packed: dict[int, bytes] = {}
     for row in conn.execute(
         "SELECT position_id, canonical_hash, packed_state, side_to_move, total_visits, source_flags "
         "FROM positions ORDER BY canonical_hash, packed_state"
     ):
         canonical = bytes(row["canonical_hash"])
         packed = bytes(row["packed_state"])
+        pid = int(row["position_id"])
         key = _position_key(canonical, packed)
-        pos_id_to_key[int(row["position_id"])] = key
+        pos_id_to_key[pid] = key
+        pos_id_to_packed[pid] = packed
         pos_rows.append(
             {
                 "position_key": key,
@@ -77,44 +84,60 @@ def build_teacher_dataset(
             }
         )
 
-    positions_path = POSITIONS_DIR / "part-00000.parquet"
-    pq.write_table(
-        pa.Table.from_pylist(pos_rows),
-        positions_path,
-        compression=compression,
-    )
+    positions_path = paths["positions"] / "part-00000.parquet"
+    pq.write_table(pa.Table.from_pylist(pos_rows), positions_path, compression=compression)
 
     policy_dedup: dict[bytes, int] = {}
     policy_writer = PolicyChunkWriter(chunk_id=0)
     label_rows: list[dict[str, Any]] = []
     obs_rows: list[dict[str, Any]] = []
+    quarantine_rows: list[dict[str, Any]] = []
 
     for row in conn.execute(
         "SELECT l.label_id, l.position_id, l.label_type, l.value, l.best_move_u8, l.source, l.payload_json, "
-        "p.canonical_hash AS pos_canonical "
+        "p.canonical_hash AS pos_canonical, p.packed_state AS pos_packed "
         "FROM labels l JOIN positions p ON p.position_id = l.position_id ORDER BY l.label_id"
     ):
+        if len(label_rows) and len(label_rows) % 100_000 == 0:
+            print(f"build progress: labels={len(label_rows)} policies={len(policy_dedup)} unresolved={lookup_stats.unresolved}", flush=True)
         payload = json.loads(row["payload_json"] or "{}")
-        pos_key = pos_id_to_key[int(row["position_id"])]
+        pid = int(row["position_id"])
+        pos_key = pos_id_to_key[pid]
         canonical = bytes(row["pos_canonical"])
+        packed = bytes(row["pos_packed"])
         target_kind = LABEL_TYPE_TO_TARGET_KIND.get(str(row["label_type"]), TARGET_OTHER)
         obs_count = int(payload.get("observation_count") or 1)
         policy_record_id = None
         ref = payload.get("sidecar_ref")
         policy_hash = payload.get("policy_hash")
+
         if policy_hash and str(row["source"] or "").startswith("friend_selfplay:"):
-            key = (canonical, str(policy_hash))
-            record = jsonl_index.get(key)
+            record = lookup_teacher_policy(
+                canonical_hash=canonical,
+                packed_state=packed,
+                policy_hash=str(policy_hash),
+                sidecar_ref=ref if isinstance(ref, dict) else None,
+                source=str(row["source"] or ""),
+                label_id=int(row["label_id"]),
+                sidecar_index=sidecar_index,
+                jsonl_by_packed=jsonl_by_packed,
+                root=root,
+                stats=lookup_stats,
+            )
             if record is None:
-                raise RuntimeError(f"JSONL policy missing for {key} label_id={row['label_id']}")
-            encoded = EncodedPolicy.from_sparse(list(record.move_codes), list(record.policy_values))
-            if encoded.content_hash not in policy_dedup:
-                policy_dedup[encoded.content_hash] = policy_writer.add(encoded)
-            policy_record_id = policy_dedup[encoded.content_hash]
-        elif ref and isinstance(ref, dict) and ref.get("sidecar"):
-            pass  # non-friend sidecar refs not yet migrated
-        elif not ref and not policy_hash:
-            pass  # NO_POLICY_IN_SOURCE
+                quarantine_rows.append(
+                    {
+                        "label_id": int(row["label_id"]),
+                        "source": str(row["source"]),
+                        "policy_hash": str(policy_hash),
+                        "reason": "unresolved_policy",
+                    }
+                )
+            else:
+                encoded = EncodedPolicy.from_sparse(list(record.move_codes), list(record.policy_values))
+                if encoded.content_hash not in policy_dedup:
+                    policy_dedup[encoded.content_hash] = policy_writer.add(encoded)
+                policy_record_id = policy_dedup[encoded.content_hash]
 
         value = row["value"]
         value_i16 = int(round(float(value) * 100)) if value is not None else None
@@ -129,6 +152,7 @@ def build_teacher_dataset(
                 "value_i16": value_i16,
                 "best_move_u8": int(row["best_move_u8"]) if row["best_move_u8"] is not None else None,
                 "policy_record_id": policy_record_id,
+                "has_policy": policy_record_id is not None,
                 "observation_count": obs_count,
                 "source_cohort": str(row["source"] or ""),
             }
@@ -154,34 +178,55 @@ def build_teacher_dataset(
 
     conn.close()
 
-    labels_path = LABELS_DIR / "part-00000.parquet"
-    obs_path = OBSERVATIONS_DIR / "part-00000.parquet"
+    labels_path = paths["labels"] / "part-00000.parquet"
+    obs_path = paths["observations"] / "part-00000.parquet"
     pq.write_table(pa.Table.from_pylist(label_rows), labels_path, compression=compression)
     pq.write_table(pa.Table.from_pylist(obs_rows), obs_path, compression=compression)
 
+    if quarantine_rows:
+        (paths["rejects"] / "policy_quarantine.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in quarantine_rows) + "\n",
+            encoding="utf-8",
+        )
+
     bin_bytes, idx_bytes = policy_writer.finalize()
-    bin_partial = POLICIES_DIR / "policy-00000.bin.partial"
-    idx_partial = POLICIES_DIR / "policy-00000.idx.partial"
-    bin_ready = POLICIES_DIR / "policy-00000.bin"
-    idx_ready = POLICIES_DIR / "policy-00000.idx"
+    bin_partial = paths["policies"] / "policy-00000.bin.partial"
+    idx_partial = paths["policies"] / "policy-00000.idx.partial"
+    bin_ready = paths["policies"] / "policy-00000.bin"
+    idx_ready = paths["policies"] / "policy-00000.idx"
     bin_partial.write_bytes(bin_bytes)
     idx_partial.write_bytes(idx_bytes)
     bin_partial.replace(bin_ready)
     idx_partial.replace(idx_ready)
 
     elapsed = time.perf_counter() - t0
+    manifest_path = output_dir / "manifest.json"
+    schema_path = output_dir / "schema.json"
     manifest = {
         "schema_version": TEACHER_DATASET_SCHEMA_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_sqlite": str(sqlite_db),
+        "teacher_dataset_status": "candidate",
+        "promotion_allowed": False,
+        "engine_parity_verified": False,
+        "cross_language_position_parity": False,
         "immutable": True,
         "compression": compression,
+        "canonical_identity_spec": spec_document(),
         "counts": {
             "positions": len(pos_rows),
             "labels": len(label_rows),
             "observations": len(obs_rows),
             "unique_policies": len(policy_dedup),
-            "policy_source_records": policy_audit.sidecar_refs,
+            "policy_quarantined": len(quarantine_rows),
+        },
+        "policy_resolution": {
+            "from_sidecar_index": lookup_stats.from_sidecar_index,
+            "from_jsonl_packed": lookup_stats.from_jsonl_packed,
+            "from_sidecar_recovery": lookup_stats.from_sidecar_recovery,
+            "no_policy": lookup_stats.no_policy,
+            "unresolved": lookup_stats.unresolved,
+            "skipped_corrupt_sidecars": skipped_sidecars,
         },
         "policy_status": policy_audit.status_counts,
         "parts": {
@@ -203,16 +248,26 @@ def build_teacher_dataset(
         "build_seconds": elapsed,
         "manifest_hash": "",
     }
-    manifest["manifest_hash"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
-    TEACHER_DATASET_MANIFEST.parent.mkdir(parents=True, exist_ok=True)
-    TEACHER_DATASET_MANIFEST.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    schema_doc = {
-        "TEACHER_DATASET_SCHEMA_VERSION": TEACHER_DATASET_SCHEMA_VERSION,
-        "columns": {
-            "positions": list(pos_rows[0].keys()) if pos_rows else [],
-            "labels": list(label_rows[0].keys()) if label_rows else [],
-            "observations": list(obs_rows[0].keys()) if obs_rows else [],
-        },
-    }
-    TEACHER_DATASET_SCHEMA.write_text(json.dumps(schema_doc, indent=2), encoding="utf-8")
+    manifest["manifest_hash"] = hashlib.sha256(
+        json.dumps({k: v for k, v in manifest.items() if k != "manifest_hash"}, sort_keys=True).encode()
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    schema_path.write_text(
+        json.dumps(
+            {
+                "TEACHER_DATASET_SCHEMA_VERSION": TEACHER_DATASET_SCHEMA_VERSION,
+                "columns": {
+                    "positions": list(pos_rows[0].keys()) if pos_rows else [],
+                    "labels": list(label_rows[0].keys()) if label_rows else [],
+                    "observations": list(obs_rows[0].keys()) if obs_rows else [],
+                },
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    if lookup_stats.unresolved:
+        manifest["promotion_blocked_reason"] = (
+            f"unresolved_policies={lookup_stats.unresolved} quarantine={len(quarantine_rows)}"
+        )
     return manifest

@@ -1,5 +1,39 @@
 # Canonical Position Store Runbook
 
+## Two-database architecture (required)
+
+| Store             | Path                                                | Contents                                                              |
+| ----------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| **GAME STORE**    | `training/data/canonical/game_store.db`             | Replayable games, edges, game paths, WDL — normal `train.py` pipeline |
+| **TEACHER STORE** | `training/data/canonical/position_teacher_store.db` | Pathless friend/search/zero/LMR labels + policy sidecars              |
+
+**Do not merge teacher snapshots into the game store.**  
+**Do not invent game paths for isolated positions.**  
+**Mixed training requires explicit `export-mixed-training`.**
+
+Friend teacher migration uses the **Rust micropool importer** (`import-friend-rust`). Build once:
+
+```powershell
+cd tools\position_store_importer
+cargo build --release
+```
+
+Direct binary:
+
+```powershell
+tools\position_store_importer\target\release\import_teacher_store.exe --version-info
+```
+
+Python wrapper (calls release binary; does not fall back to Python):
+
+```powershell
+python training\position_store.py import-friend-rust --threads 8
+```
+
+The legacy `import-friend-shards` Python path remains for reference only.
+
+---
+
 This is the durable training-data store for Titanium v15.
 
 It replaces repeated notation-string storage with:
@@ -186,7 +220,7 @@ Why the DB is still larger than the raw sources in this mixed smoke:
 - imported teacher payloads are stored in compact JSON, but still not free
 - SQLite page/index overhead is real
 
-What *is* compact already:
+What _is_ compact already:
 
 - canonical packed state is fixed-width (`24` bytes)
 - game paths are exactly one byte per move
@@ -210,8 +244,33 @@ python training\position_store.py export-training training\data\position_trainin
 
 This writes packed state hex plus compatible label metadata without replaying every game from root at export time.
 
+## Teacher Dataset (Parquet pipeline)
+
+Policy payloads for labeled positions live in compact binary sidecars under
+`training/data/canonical/teacher_sidecars/`. The read-optimised immutable
+Parquet export is built from the teacher store with:
+
+```powershell
+python training/position_store.py build-teacher-dataset --compression zstd
+```
+
+Output lands in `training/data/teacher_dataset_candidate/` until parity gates
+pass, then promoted to `training/data/teacher_dataset/`. The `manifest.json`
+inside the candidate dir signals completion. Do not interrupt a running build
+(check PID before running again).
+
+## Current Migration Status (2026-06-20)
+
+- `game_store.db` — canonical game store, active
+- `position_teacher_store.db` — canonical teacher store, active (Rust importer used)
+- `position_store_v2.db` — migration artifact only; preserved under `canonical/`
+- `teacher_dataset/` — active Parquet snapshot (~87 MB positions)
+- `teacher_dataset_candidate/` — next build (in progress or pending promotion)
+- Rust importer (`tools/position_store_importer/`) — built and used for friend shards
+
 ## Recommended Next Steps
 
-1. Keep using this store for canonical game + position migration.
-2. If friend/teacher datasets become a major long-term storage driver, move policy payloads from JSON into compact binary side tables.
+1. After candidate build completes and manifest.json appears: verify parity, then promote candidate → active dataset.
+2. Run `python training/position_store.py verify-teacher-policies` after any new sidecar import.
 3. Add an engine-vs-website legality parity suite before trusting website-produced move traces as authoritative.
+4. `position_store_v2.db` can be deleted after the two-store split is fully validated.

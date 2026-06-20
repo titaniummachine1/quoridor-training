@@ -17,10 +17,12 @@ from position_store_config import (
     CANONICAL_DB,
     DATA_DIR,
     EXPORT_DIR,
+    GAME_STORE_DB,
     LEGACY_REFERENCE_ALLOW_PREFIXES,
     REPORT_DIR,
     ROOT,
     SMOKE_DIR,
+    TEACHER_STORE_DB,
 )
 from position_store_guards import LegacyTrainingSourceError
 from position_store_lib import (
@@ -53,13 +55,15 @@ DISPOSITIONS = frozenset({
     "NON_TRAINING_ARTIFACT",
 })
 
-# Deterministic production import order (repository-relative paths or globs)
+# Game store only — pathless teacher sources go to position_teacher_store.db
 PRODUCTION_IMPORT_SOURCES: list[str] = [
     "training/data/all_games.db",
+]
+
+TEACHER_IMPORT_SOURCES: list[str] = [
     "training/data/search_pressure.jsonl",
     "training/data/zero_teacher/labels/search_budget.jsonl",
     "training/data/lmr_phase3_smoke/natural.jsonl",
-    # hard_negatives.jsonl omitted when empty — reconciled as zero-record excluded
 ]
 
 # Optional friend shards (large); pass --include-friend-shards to migrate-production
@@ -216,8 +220,10 @@ def _consumers_for(path: Path) -> list[str]:
 
 
 def _disposition_for(path: Path, fmt: str, rel: str) -> tuple[str, str, str]:
-    if rel.replace("\\", "/") == str(CANONICAL_DB.relative_to(ROOT)).replace("\\", "/"):
-        return "ACTIVE_CANONICAL", "production", "high"
+    if rel.replace("\\", "/") == str(GAME_STORE_DB.relative_to(ROOT)).replace("\\", "/"):
+        return "ACTIVE_CANONICAL", "game_store", "high"
+    if rel.replace("\\", "/") == str(TEACHER_STORE_DB.relative_to(ROOT)).replace("\\", "/"):
+        return "ACTIVE_CANONICAL", "teacher_store", "high"
     if rel in INTENTIONALLY_EXCLUDED or rel.replace("\\", "/") in INTENTIONALLY_EXCLUDED:
         reason = INTENTIONALLY_EXCLUDED.get(rel.replace("\\", "/"), "excluded")
         return "OBSOLETE_REPRODUCIBLE", "none", reason
@@ -226,12 +232,15 @@ def _disposition_for(path: Path, fmt: str, rel: str) -> tuple[str, str, str]:
     if fmt in {
         "sqlite-games-v1",
         "games-text-v1",
+    }:
+        return "MIGRATED", str(GAME_STORE_DB), "high"
+    if fmt in {
         "search-pressure-jsonl",
         "zero-search-budget-jsonl",
         "reduction-counterfactual-jsonl",
         "alpha-selfplay-jsonl",
     }:
-        return "MIGRATED", str(CANONICAL_DB), "high"
+        return "MIGRATED", str(TEACHER_STORE_DB), "high"
     if fmt == "ka-cache-jsonl":
         return "QUARANTINED_UNKNOWN_SEMANTICS", "quarantine/", "low"
     if fmt == "jsonl-unknown":
@@ -407,7 +416,7 @@ def run_production_migration(
     archive_dir = create_archive_manifest(run_id, inventory)
     manifest_hash = sha256_file(archive_dir / "manifest.json")
 
-    db_path = CANONICAL_DB
+    db_path = GAME_STORE_DB
     if db_path.exists():
         db_path.unlink()
     init_db(db_path)
@@ -529,13 +538,13 @@ def run_production_migration(
     return result
 
 
-def run_full_audit(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
+def run_full_audit(db_path: Path = GAME_STORE_DB) -> dict[str, Any]:
     from position_store_lib import audit_database
 
     return audit_database(db_path)
 
 
-def prove_idempotence(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
+def prove_idempotence(db_path: Path = GAME_STORE_DB) -> dict[str, Any]:
     before = db_summary(db_path)
     before_checksum = semantic_checksum(db_path)
     noop_sources: list[str] = []
@@ -567,7 +576,7 @@ def prove_idempotence(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
 
 
 def prove_rebuild(migration_run_id: str) -> dict[str, Any]:
-    original = CANONICAL_DB
+    original = GAME_STORE_DB
     if not original.exists():
         return {"passed": False, "error": "no production db"}
     orig_summary = db_summary(original)
@@ -579,7 +588,7 @@ def prove_rebuild(migration_run_id: str) -> dict[str, Any]:
     # Rebuild into temp path
     import shutil
 
-    saved = CANONICAL_DB
+    saved = GAME_STORE_DB
     try:
         # Temporarily redirect by copying migration logic
         from position_store_config import CANONICAL_DIR
@@ -611,7 +620,7 @@ def prove_rebuild(migration_run_id: str) -> dict[str, Any]:
     }
 
 
-def export_training_smoke(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
+def export_training_smoke(db_path: Path = GAME_STORE_DB) -> dict[str, Any]:
     from position_store_lib import export_training_rows
 
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
@@ -635,7 +644,7 @@ def export_training_smoke(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
     }
 
 
-def shard_ingestion_smoke(db_path: Path = CANONICAL_DB) -> dict[str, Any]:
+def shard_ingestion_smoke(db_path: Path = GAME_STORE_DB) -> dict[str, Any]:
     from position_store_lib import BinaryShardWriter, import_binary_shard
 
     inbox = ROOT / "training" / "data" / "selfplay_shards" / "inbox"

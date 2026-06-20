@@ -34,15 +34,17 @@ from position_store_state import (
 from position_store_config import (  # noqa: E402
     CANONICAL_DB,
     DATABASE_SCHEMA_VERSION,
+    GAME_STORE_DB,
     LABEL_SCHEMA_VERSION,
     REPORT_DIR as DEFAULT_REPORT_DIR,
     SHARD_SCHEMA_VERSION as SHARD_FORMAT_VERSION,
+    TEACHER_SIDECARS,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 TRAINING_DIR = ROOT / "training"
 DATA_DIR = TRAINING_DIR / "data"
-DEFAULT_DB_PATH = CANONICAL_DB
+DEFAULT_DB_PATH = GAME_STORE_DB
 
 SHARD_MAGIC = b"TIQSHRD1"
 SHARD_TRAILER_MAGIC = b"TIQEND1!"
@@ -230,6 +232,13 @@ class ImportStats:
     accepted_count: int = 0
     rejected_count: int = 0
     duplicate_count: int = 0
+    new_positions: int = 0
+    reused_positions: int = 0
+    labels_accepted: int = 0
+    quarantined_count: int = 0
+    aggregated_labels: int = 0
+    new_labels: int = 0
+    sidecar_bytes: int = 0
     errors: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -968,15 +977,147 @@ def _compact_alpha_payload(
     *,
     move_codes_u8: list[int],
     source_label: str,
+    sidecar_ref: dict[str, Any] | None = None,
+    policy_hash: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "schema": "friend-selfplay-v1",
         "source": source_label,
-        "policy_move_codes_u8": move_codes_u8,
-        "policy_values": list(sample.policy_values),
         "outcome": sample.outcome,
         "root_value": sample.root_value,
     }
+    if sidecar_ref is not None:
+        payload["sidecar_ref"] = sidecar_ref
+        if policy_hash:
+            payload["policy_hash"] = policy_hash
+    else:
+        payload["policy_move_codes_u8"] = move_codes_u8
+        payload["policy_values"] = list(sample.policy_values)
+    return payload
+
+
+def policy_semantic_hash(move_codes_u8: list[int], policy_values: list[float]) -> str:
+    rounded = [round(float(v), 8) for v in policy_values]
+    return hashlib.sha256(json_dumps({"m": move_codes_u8, "v": rounded}).encode()).hexdigest()
+
+
+class PolicySidecarWriter:
+    """Append-only compact binary policy sidecar (gzip)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._handle: Any = None
+        self.bytes_written = 0
+        self.records_written = 0
+
+    def _open(self):
+        import gzip
+
+        if self._handle is None:
+            self._handle = gzip.open(self.path, "ab" if self.path.exists() else "wb")
+        return self._handle
+
+    def write_policy(
+        self,
+        canonical_hash: bytes,
+        move_codes_u8: list[int],
+        policy_values: list[float],
+    ) -> dict[str, Any]:
+        handle = self._open()
+        offset = handle.tell()
+        n = len(move_codes_u8)
+        record = struct.pack("<B", n) + canonical_hash
+        for code, prob in zip(move_codes_u8, policy_values):
+            record += struct.pack("<Bf", code & 0xFF, float(prob))
+        handle.write(record)
+        self.bytes_written += len(record)
+        self.records_written += 1
+        rel = str(self.path.relative_to(ROOT)).replace("\\", "/")
+        return {"sidecar": rel, "offset": offset, "record_bytes": len(record), "policy_len": n}
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
+
+def find_aggregated_teacher_label(
+    conn: sqlite3.Connection,
+    *,
+    position_id: int,
+    label_type: str,
+    source: str,
+    value: float | None,
+    policy_hash: str | None,
+) -> int | None:
+    if value is None:
+        rows = conn.execute(
+            "SELECT label_id, payload_json FROM labels "
+            "WHERE position_id=? AND label_type=? AND source=? AND value IS NULL",
+            (position_id, label_type, source),
+        )
+    else:
+        rows = conn.execute(
+            "SELECT label_id, payload_json FROM labels "
+            "WHERE position_id=? AND label_type=? AND source=? AND value=?",
+            (position_id, label_type, source, value),
+        )
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        existing_hash = payload.get("policy_hash")
+        if policy_hash is None and existing_hash is None:
+            return int(row["label_id"])
+        if policy_hash is not None and existing_hash == policy_hash:
+            return int(row["label_id"])
+    return None
+
+
+def add_or_aggregate_teacher_label(
+    conn: sqlite3.Connection,
+    position_id: int,
+    *,
+    label_type: str,
+    source: str,
+    value: float | None = None,
+    best_move_u8: int | None = None,
+    engine_hash: str | None = None,
+    trunk_hash: str | None = None,
+    payload: dict[str, Any] | None = None,
+    policy_hash: str | None = None,
+    stats: ImportStats | None = None,
+) -> tuple[int, bool]:
+    existing = find_aggregated_teacher_label(
+        conn,
+        position_id=position_id,
+        label_type=label_type,
+        source=source,
+        value=value,
+        policy_hash=policy_hash,
+    )
+    if existing is not None:
+        if stats is not None:
+            stats.duplicate_count += 1
+            stats.aggregated_labels += 1
+        return existing, False
+    label_id = add_label(
+        conn,
+        position_id,
+        label_type=label_type,
+        source=source,
+        value=value,
+        best_move_u8=best_move_u8,
+        engine_hash=engine_hash,
+        trunk_hash=trunk_hash,
+        payload=payload,
+    )
+    if stats is not None:
+        stats.labels_accepted += 1
+        stats.new_labels += 1
+    return label_id, True
 
 
 def import_all_games_db(
@@ -1164,52 +1305,115 @@ def import_reduction_counterfactual_jsonl(
     return stats
 
 
+def _friend_iteration_cohort(path: Path) -> str:
+    parent = path.parent.name
+    if parent.startswith("iter_"):
+        return f"friend_selfplay:{parent}"
+    return "friend_selfplay:unknown"
+
+
 def import_alpha_selfplay_jsonl(
     conn: sqlite3.Connection,
     path: Path,
     *,
     dry_run: bool,
+    iteration_cohort: str | None = None,
+    sidecar_dir: Path | None = None,
+    aggregate_labels: bool = False,
 ) -> ImportStats:
     stats = ImportStats(source_path=str(path), source_format="alpha-selfplay-jsonl")
-    with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
-        for line_no, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            stats.record_count += 1
-            try:
-                obj = json.loads(line)
-                sample = _alpha_selfplay_sample_to_label(obj)
-                pos_id, created = ensure_position(conn, sample.state, ply=None, source_cohort="friend_selfplay")
-                best_move_u8 = None
-                if sample.policy_actions:
-                    best_idx = max(range(len(sample.policy_actions)), key=lambda i: sample.policy_values[i])
-                    best_move_u8 = _alpha_action_to_move_u8(sample.state, sample.policy_actions[best_idx])
-                move_codes_u8 = [_alpha_action_to_move_u8(sample.state, action) for action in sample.policy_actions]
-                add_label(
-                    conn,
-                    pos_id,
-                    label_type="teacher_value",
-                    source="friend_selfplay",
-                    value=sample.root_value,
-                    best_move_u8=best_move_u8,
-                    payload=_compact_alpha_payload(sample, move_codes_u8=move_codes_u8, source_label="friend_selfplay"),
-                )
-                result = None
-                if sample.outcome is not None and sample.outcome in (-1.0, 0.0, 1.0):
-                    result = int(sample.outcome)
-                bump_observation(conn, pos_id, "friend_selfplay", result, evaluation_value=sample.root_value)
-                if created and best_move_u8 is None:
-                    queue_relabel(
-                        conn,
-                        pos_id,
-                        requested_label_type="value_label_missing",
-                        priority=10,
-                        reason="unlabeled imported isolated position",
+    cohort = iteration_cohort or _friend_iteration_cohort(path)
+    sidecar_writer: PolicySidecarWriter | None = None
+    if sidecar_dir is not None:
+        iteration = path.parent.name
+        sidecar_path = sidecar_dir / f"{iteration}.policy.bin.gz"
+        sidecar_writer = PolicySidecarWriter(sidecar_path)
+    try:
+        with path.open("r", encoding="utf-8-sig", errors="replace") as handle:
+            for line_no, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                stats.record_count += 1
+                try:
+                    obj = json.loads(line)
+                    sample = _alpha_selfplay_sample_to_label(obj)
+                    sample.state.validate()
+                    pos_id, created = ensure_position(
+                        conn, sample.state, ply=None, source_cohort=cohort, source_flag=0x2
                     )
-                stats.accepted_count += 1
-            except Exception as exc:
-                stats.rejected_count += 1
-                stats.errors.append(f"line {line_no}: {exc}")
+                    if created:
+                        stats.new_positions += 1
+                    else:
+                        stats.reused_positions += 1
+                    best_move_u8 = None
+                    if sample.policy_actions:
+                        best_idx = max(range(len(sample.policy_actions)), key=lambda i: sample.policy_values[i])
+                        best_move_u8 = _alpha_action_to_move_u8(sample.state, sample.policy_actions[best_idx])
+                    move_codes_u8 = [_alpha_action_to_move_u8(sample.state, action) for action in sample.policy_actions]
+                    if sample.root_value is None and not sample.policy_values:
+                        stats.quarantined_count += 1
+                        stats.rejected_count += 1
+                        stats.errors.append(f"line {line_no}: quarantined unknown label semantics")
+                        continue
+                    pol_hash = policy_semantic_hash(move_codes_u8, list(sample.policy_values)) if move_codes_u8 else None
+                    sidecar_ref = None
+                    if sidecar_writer is not None and move_codes_u8:
+                        sidecar_ref = sidecar_writer.write_policy(
+                            sample.state.canonical_hash(),
+                            move_codes_u8,
+                            list(sample.policy_values),
+                        )
+                        stats.sidecar_bytes = sidecar_writer.bytes_written
+                    payload = _compact_alpha_payload(
+                        sample,
+                        move_codes_u8=move_codes_u8,
+                        source_label=cohort,
+                        sidecar_ref=sidecar_ref,
+                        policy_hash=pol_hash,
+                    )
+                    if aggregate_labels:
+                        _, label_created = add_or_aggregate_teacher_label(
+                            conn,
+                            pos_id,
+                            label_type="teacher_value",
+                            source=cohort,
+                            value=sample.root_value,
+                            best_move_u8=best_move_u8,
+                            payload=payload,
+                            policy_hash=pol_hash,
+                            stats=stats,
+                        )
+                    else:
+                        add_label(
+                            conn,
+                            pos_id,
+                            label_type="teacher_value",
+                            source=cohort,
+                            value=sample.root_value,
+                            best_move_u8=best_move_u8,
+                            payload=payload,
+                        )
+                        stats.labels_accepted += 1
+                        stats.new_labels += 1
+                    result = None
+                    if sample.outcome is not None and sample.outcome in (-1.0, 0.0, 1.0):
+                        result = int(sample.outcome)
+                    bump_observation(conn, pos_id, cohort, result, evaluation_value=sample.root_value)
+                    if created and best_move_u8 is None and not aggregate_labels:
+                        queue_relabel(
+                            conn,
+                            pos_id,
+                            requested_label_type="value_label_missing",
+                            priority=10,
+                            reason="unlabeled imported isolated position",
+                        )
+                    stats.accepted_count += 1
+                except Exception as exc:
+                    stats.rejected_count += 1
+                    stats.errors.append(f"line {line_no}: {exc}")
+    finally:
+        if sidecar_writer is not None:
+            sidecar_writer.close()
     return stats
 
 
@@ -1306,10 +1510,14 @@ def import_path(
     *,
     dry_run: bool = False,
     report_dir: Path = DEFAULT_REPORT_DIR,
+    teacher_import: bool = False,
+    sidecar_dir: Path | None = None,
 ) -> ImportStats:
     source_format = detect_import_format(source_path)
     if source_format == "jsonl-unparseable":
         raise ValueError(f"unparseable JSONL: {source_path}")
+    if teacher_import and sidecar_dir is None and source_format == "alpha-selfplay-jsonl":
+        sidecar_dir = TEACHER_SIDECARS / "friend_selfplay"
     conn = connect_db(db_path)
     source_hash = sha256_file(source_path)
     import_id = begin_import(conn, str(source_path), source_hash, source_format)
@@ -1329,7 +1537,13 @@ def import_path(
         elif source_format == "reduction-counterfactual-jsonl":
             stats = import_reduction_counterfactual_jsonl(conn, source_path, dry_run=dry_run)
         elif source_format == "alpha-selfplay-jsonl":
-            stats = import_alpha_selfplay_jsonl(conn, source_path, dry_run=dry_run)
+            stats = import_alpha_selfplay_jsonl(
+                conn,
+                source_path,
+                dry_run=dry_run,
+                sidecar_dir=sidecar_dir if teacher_import else None,
+                aggregate_labels=teacher_import,
+            )
         elif source_format == "alpha-selfplay-zip":
             stats = import_alpha_selfplay_zip(conn, source_path, dry_run=dry_run)
         else:
@@ -1725,6 +1939,7 @@ def audit_database(db_path: Path = DEFAULT_DB_PATH) -> dict[str, Any]:
     result = {
         "sqlite_integrity_check": sqlite_integrity,
         "issues": issues,
+        "passed": not issues and sqlite_integrity == "ok",
         "summary": db_summary(db_path),
         "unlabeled_positions": int(unlabeled_positions),
         "labels_by_type": labels_by_type,

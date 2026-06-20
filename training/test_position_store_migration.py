@@ -53,7 +53,11 @@ def test_semantic_checksum_stable(tmp_path: Path) -> None:
     assert a == b
 
 
-def test_legacy_reference_scan_runs() -> None:
-    result = audit_legacy_references()
-    assert "violations" in result
-    assert "passed" in result
+def test_discover_friend_shards() -> None:
+    from position_store_friend import discover_friend_shards
+
+    shards = discover_friend_shards()
+    assert len(shards) == 20
+    assert all(p.name == "shard_000.jsonl" for p in shards)
+    assert shards[0].parent.name == "iter_000001"
+    assert shards[-1].parent.name == "iter_000020"

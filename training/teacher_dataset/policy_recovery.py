@@ -1,7 +1,9 @@
 """Recover TIQSIDE1 policies by scanning decompressed sidecars (DB offsets are compressed-file positions)."""
 from __future__ import annotations
 
+import gzip
 import json
+import zlib
 from functools import lru_cache
 from pathlib import Path
 
@@ -23,8 +25,11 @@ def preload_sidecar_indexes(sidecar_dir: Path) -> None:
 @lru_cache(maxsize=32)
 def _load_file_index(path: Path) -> dict[bytes, list[SidecarRecord]]:
     index: dict[bytes, list[SidecarRecord]] = {}
-    for _off, rec in iter_sidecar_records(path):
-        index.setdefault(rec.canonical_hash, []).append(rec)
+    try:
+        for _off, rec in iter_sidecar_records(path):
+            index.setdefault(rec.canonical_hash, []).append(rec)
+    except (OSError, ValueError, EOFError, gzip.BadGzipFile, zlib.error):
+        return index
     return index
 
 
@@ -32,6 +37,7 @@ def recover_policy_record(
     stored_path: str,
     *,
     canonical_hash: bytes,
+    packed_state: bytes | None = None,
     policy_hash: str | None,
     root: Path,
 ) -> SidecarRecord | None:
@@ -48,12 +54,11 @@ def recover_policy_record(
                         if h == policy_hash:
                             return rec
                 return candidates[0]
-        except (OSError, ValueError):
+        except (OSError, ValueError, gzip.BadGzipFile, zlib.error):
             pass
 
-    from .jsonl_policy_index import recover_policy_from_jsonl
+    if packed_state is not None and policy_hash:
+        from .jsonl_policy_index import recover_policy_from_jsonl_packed
 
-    return recover_policy_from_jsonl(
-        canonical_hash=canonical_hash,
-        policy_hash=str(policy_hash) if policy_hash else None,
-    )
+        return recover_policy_from_jsonl_packed(packed_state=packed_state, policy_hash=str(policy_hash))
+    return None

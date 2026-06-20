@@ -6,10 +6,12 @@ import sys
 from pathlib import Path
 
 from position_store_config import (
-    CANONICAL_DB,
     CANONICAL_EXPORT_COMMAND,
+    GAME_STORE_DB,
     LEGACY_SMOKE_DBS,
     LEGACY_TRAINING_SOURCES,
+    TEACHER_EXPORT_COMMAND,
+    TEACHER_STORE_DB,
 )
 
 
@@ -47,13 +49,14 @@ def assert_canonical_training_db(path: Path | str, *, context: str = "training")
     if is_legacy_training_source(p):
         raise LegacyTrainingSourceError(
             f"{context}: {p} is a legacy migration source.\n"
-            f"Use the canonical position store: {CANONICAL_DB}\n"
+            f"Use the game store: {GAME_STORE_DB}\n"
+            f"Teacher labels: {TEACHER_STORE_DB} with --include-teacher-labels\n"
             f"Export labeled rows with:\n  {CANONICAL_EXPORT_COMMAND}"
         )
     if is_smoke_database(p):
         raise LegacyTrainingSourceError(
             f"{context}: {p} is a smoke/test database, not production.\n"
-            f"Use: {CANONICAL_DB}"
+            f"Use: {GAME_STORE_DB}"
         )
     return p
 
@@ -80,7 +83,8 @@ def guard_main(module_name: str) -> None:
         return
     print(
         f"WARNING: {module_name} is a LEGACY IMPORT / collection tool.\n"
-        f"Canonical source of truth: {CANONICAL_DB}\n"
+        f"Canonical game store: {GAME_STORE_DB}\n"
+        f"Teacher store (explicit only): {TEACHER_STORE_DB}\n"
         f"See training/CANONICAL_DATASTORE.md",
         file=sys.stderr,
     )

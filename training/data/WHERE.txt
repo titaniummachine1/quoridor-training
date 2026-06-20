@@ -10,11 +10,29 @@ ENGINE NAMING
   titanium-v14          Legacy alias for v15 (same binary build)
   ace-v13-grafted       Legacy alias for v15 (same binary build)
 
-KEY FILES (training/data/)
---------------------------
-  all_games.db              Game sequences for training (SQLite, ingested per game)
-  v15_vs_ti_pure.games      Infinite benchmark raw games (v15 vs baseline)
-  self_match_games.games    Default self_match.js output
+CANONICAL DATA STORES (two-database architecture)
+-------------------------------------------------
+  game_store.db              → replayable Titanium games + WDL, used by train.py
+    training/data/canonical/game_store.db
+
+  position_teacher_store.db  → pathless labeled positions (friend/zero/LMR), explicit only
+    training/data/canonical/position_teacher_store.db
+
+  teacher_sidecars/          → compact binary policy payloads
+    training/data/canonical/teacher_sidecars/
+
+  teacher_dataset/           → immutable Parquet training records (positions + labels)
+    training/data/teacher_dataset/
+
+  migration_artifacts/       → position_store_v2.db (do not train from)
+    training/data/canonical/migration_artifacts/
+
+  See training/CANONICAL_DATASTORE.md for authoritative commands.
+
+LEGACY FILES (still active for pool ingest)
+-------------------------------------------
+  all_games.db              Game sequences for run_swiss_overnight.py (SQLite)
+  v15_vs_ti_pure.games      Infinite benchmark raw games
   benchmarks/*.games        One raw games file per named benchmark
   benchmarks_log.jsonl      Historical benchmark results + Elo estimates
   manifest.json             Elo matchups + global rating ladder
@@ -24,10 +42,8 @@ ELO SYSTEM
 ----------
   Per matchup: only W/L counts (+1 per game). Settings stored as engine@tc
     e.g. titanium-v15@5s  vs  ace-v13-ti-pure@5s
-         titanium-v15@2s  vs  ishtar@long
   Direct diff: from W/L ratio (~+80 Elo style)
   Global ladder: anchor ace-v13-ti-pure@5s = 1600, naive propagation
-    → see 1612 vs 1600 not just "+12". Ishtar/Ka linked when you play them.
 
 HOW TO RUN
 ----------
@@ -39,4 +55,3 @@ HOW TO RUN
 
 ELO: direct head-to-head diff = most precise for THAT pairing.
      global ladder (1600-scale) = best for ranking whole field (naive propagation).
-

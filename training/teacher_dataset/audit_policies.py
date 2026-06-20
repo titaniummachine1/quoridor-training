@@ -65,7 +65,7 @@ def audit_teacher_policies(
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     query = (
-        "SELECT l.label_id, l.payload_json, p.canonical_hash "
+        "SELECT l.label_id, l.payload_json, p.canonical_hash, p.packed_state "
         "FROM labels l JOIN positions p ON p.position_id = l.position_id"
     )
     if limit:
@@ -117,16 +117,10 @@ def audit_teacher_policies(
 
         policy_hash = payload.get("policy_hash")
         canonical = bytes(row["canonical_hash"])
-        if not verify_payloads:
-            if cls.startswith("path_ok") or cls.startswith("repaired_"):
-                result.status_counts[POLICY_RECOVERED] = result.status_counts.get(POLICY_RECOVERED, 0) + 1
-            else:
-                result.unresolved += 1
-            continue
-
         record = recover_policy_record(
             stored,
             canonical_hash=canonical,
+            packed_state=bytes(row["packed_state"]),
             policy_hash=str(policy_hash) if policy_hash else None,
             root=root,
         )

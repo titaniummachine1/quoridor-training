@@ -78,26 +78,36 @@ If `eval-batch` is correct, training is correct. There is no hidden dataset drif
 | `zero_teacher/collect_budget.py`    | MCTS attention labels from quoridor-zero.ink (50–400 visits)             |
 | `train_search_importance.py`        | Train the sidecar search-pressure head                                   |
 | `run_search_pressure_experiment.py` | Cloud/overnight wrapper for pressure-label collection + head training    |
-| `collect_reduction_counterfactuals.py` | Complete-pipeline A/B labels for provisional +1 LMR                  |
-| `train_reduction_sidecar.py`        | Frozen linear safe-and-beneficial reduction sidecar                      |
+| `collect_reduction_counterfactuals_v3.py` | Phase-3 grouped A/B collector (natural + hard-negative mining)   |
+| `train_lmr_head_v3.py`             | Phase-3 LMR head trainer (P/PL/PL-NL8, phased: narrow→stability→holdout→shadow) |
 | `position_store.py`                 | Canonical position graph DB: inventory, import, shard ingest, audits     |
 | `probe_legal_wall_signal.py`        | Correlation probe for ws[14] ablation                                    |
 | `plateau_probe.py`                  | Eval-drift / promotion gate                                              |
 
-## Canonical Position Store
+## Canonical Position Store (two databases)
 
-The new durable training-data store lives behind `training/position_store.py`.
-It stores:
+Training data is split into **two physically separate SQLite databases**:
 
-- canonical unique packed positions
-- stable 1-byte move paths
-- parent/move/child graph edges
-- versioned labels
+| Store | Default path | Used by |
+|-------|--------------|---------|
+| Game store | `training/data/canonical/game_store.db` | `train.py`, self-play shard ingest, pool imports, WDL training |
+| Teacher store | `training/data/canonical/position_teacher_store.db` | Friend/zero/search/LMR labels — **explicit flags only** |
+
+Both share the same position codec and canonical hash. They are not merged unless you run `export-mixed-training`.
+
+The durable store lives behind `training/position_store.py`. The game store holds:
+
+- canonical unique packed positions reachable by legal replay
+- stable 1-byte move paths and graph edges
+- WDL game records
 - append-only shard imports
 
-Read [`CANONICAL_DATASTORE.md`](CANONICAL_DATASTORE.md) first — it defines the production
-database path, legacy policy, and authoritative commands. Then read
+The teacher store holds pathless labeled positions and compact policy sidecars under `teacher_sidecars/`.
+
+Read [`CANONICAL_DATASTORE.md`](CANONICAL_DATASTORE.md) first — it defines paths, legacy policy, and authoritative commands. Then read
 [`POSITION_STORE_RUNBOOK.md`](POSITION_STORE_RUNBOOK.md) for import/migration details.
+
+**For future agents:** do not recreate a single combined database; do not import friend shards into the game store.
 
 ## Pre-Flight
 
@@ -171,27 +181,43 @@ until eval/search/rollout smokes pass.
 - `titanium eval-batch` - stdin: one move sequence per line; JSON per position
 - `titanium match --a <eng> --b <eng> --games N --time S` - self-play strength
 
-## Reduction Sidecar
+## Learned LMR Reduction Sidecar (Phase 3)
 
-The generic pressure scalar below is historical. The operational experiment is now the
-narrow binary question: can this already-LMR-eligible late wall take one additional
-provisional reduction while preserving the native pipeline decision and saving enough
-total nodes to matter?
+**Read [`PHASE3_LMRH_RUNBOOK.md`](PHASE3_LMRH_RUNBOOK.md) first.** This section is a brief pointer only.
+
+The model predicts whether one additional search-depth reduction is safe and profitable for an already-LMR-eligible move (binary: safe +1 ply or not). It is **not** a depth extender — it only reduces, never increases search depth.
+
+Runtime activation is **OFF** (shadow/candidate mode only). The eval trunk (`net_weights.bin`) is never modified by this pipeline.
+
+**Phase-3 scripts (current):**
 
 ```powershell
-python training/collect_reduction_counterfactuals.py --positions 200 --samples-per-position 2 --depth 5
-python training/train_reduction_sidecar.py --data training/data/reduction_counterfactuals.jsonl
+# Natural collection (target 10 000 events, depth 8)
+python training/collect_reduction_counterfactuals_v3.py `
+  --natural-target 10000 --out-dir training/data/lmr_phase3 `
+  --depth 8 --min-event-depth 6 --min-ply 11 --seed 777
+
+# Hard-negative enrichment (separate pass)
+python training/collect_reduction_counterfactuals_v3.py `
+  --hard-negative-pass `
+  --natural-file training/data/lmr_phase3/natural.jsonl `
+  --out-dir training/data/lmr_phase3 --hard-negative-target 200
+
+# Training phases: narrowing → stability → manifest → holdout → shadow
+python training/train_lmr_head_v3.py `
+  --natural training/data/lmr_phase3/natural.jsonl `
+  --hard-negatives training/data/lmr_phase3/hard_negatives.jsonl `
+  --out-dir training/checkpoints/lmr_v3 --phase narrowing
 ```
 
-The collector runs baseline and counterfactual searches from separate fresh fixed-TT
-states. It stores safety and savings independently and retains failed comparisons as
-`UNKNOWN`. The trainer excludes `UNKNOWN`, freezes the value network by consuming stored
-hidden features only, uses natural runtime-eligible games for calibration/test, and writes
-an independently hash-bound `search_reduction_head.bin`. Training never deploys it.
+See [`PHASE3_LMRH_RUNBOOK.md`](PHASE3_LMRH_RUNBOOK.md) for the full sequence and smoke-run commands.
 
-Zero-ink may rank candidate moves, but its visits/value/policy never define the label.
+**Stage-2 legacy scripts** (`collect_reduction_counterfactuals.py`, `train_reduction_sidecar.py`, `train_reduction_sidecar_v2.py`) are preserved for reference. Do not use them for new collection.
+
 Native Titanium A/B search is the label authority. Runtime activation remains disabled;
 `titanium reduction-shadow` computes predictions without changing LMR or the search tree.
+
+**Test suites:** `training/test_reduction_counterfactuals.py` (62 tests) and `training/test_lmr_head_v3.py` (69 tests). Run with `python -m pytest training/test_reduction_counterfactuals.py training/test_lmr_head_v3.py`.
 
 ## Historical Search-Pressure Labels
 

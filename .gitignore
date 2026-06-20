@@ -1,4 +1,4 @@
-﻿web/node_modules/
+web/node_modules/
 web/dist/
 *.log
 
@@ -60,7 +60,9 @@ training/data/ka_bootstrap.err
 training/data/wallz_*
 training/data/position_store_reports/
 training/data/position_graph_compact_smoke*
+training/data/archive/backups/
 training/data/canonical/
+tools/position_store_importer/target/
 training/data/archive/
 training/data/smoke/
 training/data/exports/

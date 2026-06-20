@@ -76,6 +76,7 @@ from position_store_migration import (
 )
 from position_store_split import run_split_migration
 from teacher_dataset.cli import (
+    cmd_audit_position_parity,
     cmd_audit_teacher_dataset,
     cmd_benchmark_teacher_readers,
     cmd_build_teacher_dataset,
@@ -84,7 +85,7 @@ from teacher_dataset.cli import (
     cmd_stats_teacher_dataset,
     cmd_verify_teacher_policies,
 )
-from teacher_dataset.config import TEACHER_CATALOG_DB, TEACHER_DATASET_DIR
+from teacher_dataset.config import TEACHER_CATALOG_DB, TEACHER_DATASET_CANDIDATE_DIR
 
 
 def print_json(data: object) -> None:
@@ -177,13 +178,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("freeze-teacher-reference", help="mark SQLite teacher store as correctness reference (training_active=false)")
 
-    build_ds = sub.add_parser("build-teacher-dataset", help="build immutable Parquet teacher dataset from SQLite reference")
-    build_ds.add_argument("--output", type=Path, default=TEACHER_DATASET_DIR)
+    build_ds = sub.add_parser("build-teacher-dataset", help="build candidate Parquet teacher dataset (not promoted until parity gates pass)")
+    build_ds.add_argument("--output", type=Path, default=TEACHER_DATASET_CANDIDATE_DIR)
     build_ds.add_argument("--catalog", type=Path, default=TEACHER_CATALOG_DB)
     build_ds.add_argument("--compression", default="zstd", choices=["zstd", "snappy", "none"])
 
-    sub.add_parser("audit-teacher-dataset", help="audit built Parquet teacher dataset manifest")
-    stats_ds = sub.add_parser("stats-teacher-dataset", help="stats for immutable teacher dataset")
+    parity = sub.add_parser("audit-position-parity", help="Rust/Python packed-state parity audit over friend corpus")
+    parity.add_argument("--limit", type=int, default=None, help="audit first N JSONL records only")
+
+    sub.add_parser("audit-teacher-dataset", help="audit built candidate Parquet teacher dataset manifest")
+    stats_ds = sub.add_parser("stats-teacher-dataset", help="stats for candidate teacher dataset")
+    stats_ds.add_argument("--output", type=Path, default=TEACHER_DATASET_CANDIDATE_DIR)
     stats_ds.add_argument("--catalog", type=Path, default=TEACHER_CATALOG_DB)
     bench_ds = sub.add_parser("benchmark-teacher-readers", help="benchmark DuckDB/Parquet read throughput")
     bench_ds.add_argument("--catalog", type=Path, default=TEACHER_CATALOG_DB)
@@ -473,11 +478,17 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_verify_teacher_policies(args)
     if cmd == "freeze-teacher-reference":
         return cmd_freeze_teacher_reference(args)
+    if cmd == "audit-position-parity":
+        return cmd_audit_position_parity(args)
     if cmd == "build-teacher-dataset":
         return cmd_build_teacher_dataset(args)
     if cmd == "audit-teacher-dataset":
+        if not hasattr(args, "output"):
+            args.output = TEACHER_DATASET_CANDIDATE_DIR
         return cmd_audit_teacher_dataset(args)
     if cmd == "stats-teacher-dataset":
+        if not hasattr(args, "output"):
+            args.output = TEACHER_DATASET_CANDIDATE_DIR
         return cmd_stats_teacher_dataset(args)
     if cmd == "benchmark-teacher-readers":
         return cmd_benchmark_teacher_readers(args)

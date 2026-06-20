@@ -10,14 +10,14 @@ import duckdb
 
 from position_store_config import ROOT
 
-from .config import TEACHER_CATALOG_DB, TEACHER_DATASET_MANIFEST
+from .config import TEACHER_CATALOG_DB, TEACHER_DATASET_CANDIDATE_MANIFEST
 from .schema import CATALOG_SCHEMA_VERSION
 
 
 def build_teacher_catalog(
     catalog_path: Path = TEACHER_CATALOG_DB,
     *,
-    manifest_path: Path = TEACHER_DATASET_MANIFEST,
+    manifest_path: Path = TEACHER_DATASET_CANDIDATE_MANIFEST,
     root: Path = ROOT,
 ) -> dict[str, Any]:
     if not manifest_path.exists():

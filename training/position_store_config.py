@@ -18,12 +18,28 @@ EXPORT_DIR = DATA_DIR / "exports"
 SHARD_INBOX = DATA_DIR / "selfplay_shards" / "inbox"
 SHARD_PROCESSED = DATA_DIR / "selfplay_shards" / "processed"
 SIDECAR_DIR = CANONICAL_DIR / "sidecars"
+MIGRATION_ARTIFACT_DIR = CANONICAL_DIR / "migration_artifacts"
+RUST_IMPORTER_BIN = ROOT / "tools" / "position_store_importer" / "target" / "release" / "import_teacher_store.exe"
+FRIEND_CORPUS_DIR = ROOT / "KaAiData" / "ANOTHER TRAINING DAT ASTUFF SUPER USEFULL" / "selfplay_iters_000001_000020"
+BACKUP_DIR = DATA_DIR / "archive" / "backups"
 
-# Active production database (schema v1 graph store — not compact v2).
+# Two physically separate production databases (shared position codec / hash only).
+GAME_STORE_DB = Path(os.environ.get("TI_GAME_STORE_DB", str(CANONICAL_DIR / "game_store.db")))
+TEACHER_STORE_DB = Path(
+    os.environ.get("TI_TEACHER_STORE_DB", str(CANONICAL_DIR / "position_teacher_store.db"))
+)
+TEACHER_SIDECARS = Path(os.environ.get("TI_TEACHER_SIDECARS", str(CANONICAL_DIR / "teacher_sidecars")))
+FRIEND_SIDECAR_DIR = TEACHER_SIDECARS / "friend_selfplay"
+
+# Legacy combined DB path (migration artifact only — do not use for training).
+LEGACY_COMBINED_DB = CANONICAL_DIR / "position_store_v2.db"
+COMBINED_PARTIAL_FRIEND_ARTIFACT = MIGRATION_ARTIFACT_DIR / "position_store_v2_combined_partial_friend.db"
+
+# Back-compat alias: active game pipeline default.
 CANONICAL_DB = Path(
     os.environ.get(
         "TI_POSITION_STORE_DB",
-        str(CANONICAL_DIR / "position_store_v2.db"),
+        os.environ.get("TI_GAME_STORE_DB", str(GAME_STORE_DB)),
     )
 )
 
@@ -68,6 +84,7 @@ LEGACY_TRAINING_SOURCES = frozenset(
 # Paths allowed to reference legacy data (importers, migration, docs)
 LEGACY_REFERENCE_ALLOW_PREFIXES = (
     "training/position_store",
+    "training/position_store_friend",
     "training/test_position_store",
     "training/CANONICAL_DATASTORE",
     "training/POSITION_STORE_RUNBOOK",
@@ -90,6 +107,14 @@ LEGACY_REFERENCE_ALLOW_PREFIXES = (
 )
 
 CANONICAL_EXPORT_COMMAND = (
-    "python training/position_store.py export-training "
-    "training/data/exports/training_export.jsonl --label-type teacher_value"
+    "python training/position_store.py export-game-training "
+    "training/data/exports/game_training_export.jsonl"
+)
+TEACHER_EXPORT_COMMAND = (
+    "python training/position_store.py export-teacher-training "
+    "training/data/exports/teacher_training_export.jsonl --include-teacher-labels"
+)
+MIXED_EXPORT_COMMAND = (
+    "python training/position_store.py export-mixed-training "
+    "training/data/exports/mixed_training_export.jsonl"
 )

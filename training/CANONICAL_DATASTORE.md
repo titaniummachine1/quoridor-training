@@ -1,125 +1,146 @@
 # Canonical Datastore — Titanium v15 Training
 
 **DO NOT TRAIN DIRECTLY FROM LEGACY JSONL OR OLD GAME DATABASES.**  
-**THE CANONICAL POSITION STORE IS THE SOURCE OF TRUTH.**
+**DO NOT MERGE TEACHER SNAPSHOTS INTO THE GAME STORE.**
 
-## Active architecture
+## Two physically separate databases
 
-```text
-canonical position graph database     training/data/canonical/position_store_v2.db
-+ versioned binary sidecars           training/data/canonical/sidecars/   (compact v2 — experimental)
-+ compact training exports            training/data/exports/
-+ original immutable source archive   training/data/archive/legacy_sources/
-+ self-play shard inbox               training/data/selfplay_shards/inbox/
-```
+| Store             | Path                                                | Purpose                                                                       |
+| ----------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
+| **GAME STORE**    | `training/data/canonical/game_store.db`             | Replayable Titanium games for self-play ingestion, WDL training, pool imports |
+| **TEACHER STORE** | `training/data/canonical/position_teacher_store.db` | Isolated labeled positions (friend, search-pressure, zero-teacher, LMR)       |
 
-## Schema versions (frozen for migration run)
+Both stores share the same `MOVE_SCHEMA_VERSION`, `POSITION_SCHEMA_VERSION`, packed position encoding, and canonical position hash. They are **never physically merged** unless you explicitly run a mixed export.
 
-| Key | Version |
-|-----|---------|
-| `DATABASE_SCHEMA_VERSION` | 1 |
-| `POSITION_SCHEMA_VERSION` | 1 |
-| `MOVE_SCHEMA_VERSION` | 1 |
-| `LABEL_SCHEMA_VERSION` | 1 |
-| `SHARD_SCHEMA_VERSION` | 1 |
-
-Move alphabet: wall `0–127`, pawn direction classes `128–135`, reserved `136–255`.
-
-Production metadata flags:
+Policy payloads for teacher data live in compact binary sidecars:
 
 ```text
-canonical_migration_complete = true
-engine_parity_verified       = false   # Rust/Python parity not yet proven
-compact_label_migration        = pending # position_store_compact.py is experimental
+training/data/canonical/teacher_sidecars/
 ```
+
+The legacy combined database (`position_store_v2.db`) is a **migration artifact only** — preserved under `training/data/canonical/migration_artifacts/` after split migration.
+
+## Teacher training dataset (immutable, read-optimized)
+
+| Artifact | Path | Role |
+| -------- | ---- | ---- |
+| **Teacher dataset** | `training/data/teacher_dataset/` | Immutable Parquet positions/labels/observations + sparse policy sidecars |
+| **Teacher catalog** | `training/data/canonical/teacher_catalog.duckdb` | Read-only DuckDB views over Parquet (no duplicated payload tables) |
+| **SQLite reference** | `training/data/canonical/teacher_sqlite_reference/` | Correctness reference only — `training_active=false` |
+
+```text
+game_store.db              → replayable Titanium games (mutable ingestion)
+teacher_dataset/           → immutable training records (Parquet + policies)
+teacher_catalog.duckdb     → read-only catalog and analytical views
+position_teacher_store.db  → archived SQLite correctness reference (do not train from)
+```
+
+Build:
+
+```powershell
+python training/position_store.py freeze-teacher-reference
+python training/position_store.py verify-teacher-policies
+python training/position_store.py build-teacher-dataset --compression zstd
+python training/position_store.py benchmark-teacher-readers
+```
+
+
+```text
+default:              game_store only  (train.py, self-play, pool imports)
+teacher distillation: teacher_store only  (--include-teacher-labels)
+mixed training:       explicit export-mixed-training only
+```
+
+## Schema versions (frozen)
+
+| Key                       | Version |
+| ------------------------- | ------- |
+| `DATABASE_SCHEMA_VERSION` | 1       |
+| `POSITION_SCHEMA_VERSION` | 1       |
+| `MOVE_SCHEMA_VERSION`     | 1       |
+| `LABEL_SCHEMA_VERSION`    | 1       |
+| `SHARD_SCHEMA_VERSION`    | 1       |
 
 ## Authoritative commands
 
 ```powershell
 Set-Location "C:\gitProjects\Quoridor best AI"
 
-# Production DB status
-python training\position_store.py stats
-python training\position_store.py audit-canonical
-
-# Full migration (from scratch, preserves source archive)
-python training\position_store.py migrate-production
-
-# Ingest new self-play shards
+# Game store (normal pipeline)
+python training\position_store.py stats-game-store
+python training\position_store.py audit-game-store
+python training\position_store.py import-games training\data\all_games.db
 python training\position_store.py ingest-shards training\data\selfplay_shards\inbox
+python training\position_store.py export-game-training training\data\exports\game_training_export.jsonl
 
-# Export labeled training rows
-python training\position_store.py export-training training\data\exports\training_export.jsonl --label-type teacher_value
+# Teacher store (explicit only)
+python training\position_store.py stats-teacher-store
+python training\position_store.py audit-teacher-store
+python training\position_store.py import-teacher-positions
+python training\position_store.py import-friend-rust --threads 8
+python training\position_store.py export-teacher-training training\data\exports\teacher_export.jsonl --include-teacher-labels
 
-# NNUE outcome training (reads games from canonical store)
+# Legacy Python friend importer (single-threaded reference only):
+python training\position_store.py import-friend-shards
+
+# Mixed export (explicit join/dedupe)
+python training\position_store.py export-mixed-training training\data\exports\mixed_export.jsonl
+
+# Split recovery (preserve combined artifact, restore game store, populate teacher store)
+python training\position_store.py split-migration
+
+# NNUE WDL training — reads game store by default
 python training\train.py
 ```
 
-## Environment overrides
+## Environment variables
 
-| Variable | Default |
-|----------|---------|
-| `TI_POSITION_STORE_DB` | `training/data/canonical/position_store_v2.db` |
-| `TI_POSITION_STORE_SIDECARS` | `training/data/canonical/sidecars` |
-| `TI_POSITION_STORE_SHARD_INBOX` | `training/data/selfplay_shards/inbox` |
-| `TI_POSITION_STORE_EXPORTS` | `training/data/exports` |
-| `TI_POSITION_STORE_ARCHIVE` | `training/data/archive/legacy_sources` |
+| Variable                        | Default                                             |
+| ------------------------------- | --------------------------------------------------- |
+| `TI_GAME_STORE_DB`              | `training/data/canonical/game_store.db`             |
+| `TI_TEACHER_STORE_DB`           | `training/data/canonical/position_teacher_store.db` |
+| `TI_TEACHER_SIDECARS`           | `training/data/canonical/teacher_sidecars`          |
+| `TI_POSITION_STORE_DB`          | alias → `TI_GAME_STORE_DB`                          |
+| `TI_POSITION_STORE_SHARD_INBOX` | `training/data/selfplay_shards/inbox`               |
+| `TI_POSITION_STORE_EXPORTS`     | `training/data/exports`                             |
+| `TI_POSITION_STORE_ARCHIVE`     | `training/data/archive/legacy_sources`              |
 
-Pool/coordinator legacy writes (temporary until shard pipeline is default):
+## Data placement rules
 
-```powershell
-$env:TI_ALLOW_LEGACY_GAME_DB = "1"
-```
+**Game store:** replayable games, edges, game paths, WDL, Titanium search labels on replay-derived positions.
 
-## Legacy vs smoke vs production
+**Teacher store:** KaAiData friend snapshots, search-pressure, zero-teacher, pathless LMR candidates, policy/value sidecars.
 
-| Path | Role |
-|------|------|
-| `training/data/canonical/position_store_v2.db` | **Production canonical store** |
-| `training/data/all_games.db` | Legacy game-ingest source only — not for training |
-| `training/data/search_pressure.jsonl` | Legacy label source — import only |
-| `training/data/smoke/*` | Reproducible smoke DBs — never production |
-| `training/data/archive/legacy_sources/*` | Immutable migration manifests + checksums |
-| `training/data/position_store_reports/*` | Reject reports and inventories |
+**Never:** invent game paths, fake edges, or parent-child ancestry for isolated teacher snapshots.
 
-## Rebuild from archive
+## Rust importer (friend shards)
+
+The Rust micropool importer (`tools/position_store_importer/`) handles bulk friend-shard imports at ~10× Python speed. Build once:
 
 ```powershell
-python training\position_store.py migrate-production
-python training\position_store.py prove-idempotence
-python training\position_store.py prove-rebuild --migration-run-id <run_id>
+cd tools\position_store_importer
+cargo build --release
 ```
 
-`<run_id>` is the timestamp directory under `training/data/archive/legacy_sources/`.
-
-## Backup / restore
-
-Sources are never deleted. Before migration, checksums are written to:
-
-```text
-training/data/archive/legacy_sources/<migration_run_id>/checksums.sha256
-```
-
-Copy the production DB for backup:
+Then import via the Python wrapper:
 
 ```powershell
-Copy-Item training\data\canonical\position_store_v2.db training\data\archive\backups\position_store_v2.db.bak
+python training\position_store.py import-friend-rust --threads 8
 ```
 
-## Compact schema status (Option B — deferred)
+The legacy `import-friend-shards` Python path is kept for reference only.
 
-`position_store_compact.py` implements schema v2 scaffolding (`i16` centitempo, sidecars).  
-It is **experimental only**. Production canonical format remains schema v1 graph SQLite until compact migration is explicitly promoted.
+## Migration status (2026-06-20)
 
-## Instructions for future coding agents
+- `game_store.db` and `position_teacher_store.db` are active and validated.
+- `position_store_v2.db` is a migration artifact — do not train from it. Scheduled for removal after full validation.
+- `teacher_dataset/` contains the active immutable Parquet snapshot.
+- `teacher_dataset_candidate/` holds the in-progress next build.
 
-- Do not create a second training-data database.
-- Do not train directly from legacy JSONL or old SQLite files.
-- Use the canonical position-store CLI.
-- New self-play data must arrive through versioned binary shards.
-- New labels must be attached through versioned label sets.
-- Preserve occurrence counts while deduplicating positions.
-- Never reinterpret rejected records without an explicit migration.
-- Update schema versions and this document for format changes.
+## For future agents
 
-See also: [`POSITION_STORE_RUNBOOK.md`](POSITION_STORE_RUNBOOK.md)
+1. Do **not** recreate a single combined canonical database.
+2. Friend / pathless JSONL imports go to `position_teacher_store.db` only.
+3. `train.py` defaults to `game_store.db` — do not point it at the teacher store without an explicit training-mode change.
+4. Mixed training requires `export-mixed-training` — no automatic mixing.
+5. Never touch `teacher_dataset_candidate/` while a build is running (check for running Python PID first).

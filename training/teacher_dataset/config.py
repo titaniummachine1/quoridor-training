@@ -6,6 +6,8 @@ from pathlib import Path
 from position_store_config import BACKUP_DIR, FRIEND_CORPUS_DIR, REPORT_DIR, ROOT, TEACHER_SIDECARS, TEACHER_STORE_DB
 
 TEACHER_DATASET_DIR = ROOT / "training" / "data" / "teacher_dataset"
+TEACHER_DATASET_CANDIDATE_DIR = ROOT / "training" / "data" / "teacher_dataset_candidate"
+TEACHER_DATASET_CANDIDATE_MANIFEST = TEACHER_DATASET_CANDIDATE_DIR / "manifest.json"
 TEACHER_CATALOG_DB = ROOT / "training" / "data" / "canonical" / "teacher_catalog.duckdb"
 TEACHER_DATASET_MANIFEST = TEACHER_DATASET_DIR / "manifest.json"
 TEACHER_DATASET_SCHEMA = TEACHER_DATASET_DIR / "schema.json"
