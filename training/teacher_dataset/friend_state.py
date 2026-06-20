@@ -8,9 +8,9 @@ from position_store_state import PositionState
 
 def parse_friend_state(obj: dict[str, Any]) -> PositionState:
     state_obj = obj["state"]
-    side = state_obj.get("currentPlayer", state_obj.get("sideToMove"))
-    if side is None:
+    if "currentPlayer" not in state_obj:
         raise KeyError("state.currentPlayer")
+    side = state_obj["currentPlayer"]
     return PositionState(
         player0_cell=int(state_obj["player0Cell"]),
         player1_cell=int(state_obj["player1Cell"]),

@@ -699,7 +699,14 @@ LEGACY_PATH_PATTERNS = [
     re.compile(r"training/data/search_pressure\.jsonl"),
     re.compile(r"training/data/position_graph(_smoke)?\.db"),
     re.compile(r"training/data/smoke.*\.jsonl"),
+    re.compile(r"position_store_v2\.db"),
 ]
+
+LEGACY_SCAN_SKIP_PREFIXES = (
+    "training/_progress",
+    "training/_breakdown",
+    "training/_stats_tmp",
+)
 
 
 def audit_legacy_references(scan_root: Path = ROOT / "training") -> dict[str, Any]:
@@ -720,6 +727,13 @@ def audit_legacy_references(scan_root: Path = ROOT / "training") -> dict[str, An
         if path.suffix not in {".py", ".md", ".ps1"}:
             continue
         rel = str(path.relative_to(ROOT)).replace("\\", "/")
+        skip = False
+        for skip_prefix in LEGACY_SCAN_SKIP_PREFIXES:
+            if rel.startswith(skip_prefix.replace("\\", "/")):
+                skip = True
+                break
+        if skip:
+            continue
         allowed = False
         for prefix in LEGACY_REFERENCE_ALLOW_PREFIXES:
             if rel.startswith(prefix.replace("\\", "/")):

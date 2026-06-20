@@ -2,7 +2,8 @@
 
 LEGACY IMPORT TOOL ONLY for direct SQLite game DB writes.
 Do not use all_games.db as the active training database.
-Canonical source: training/data/canonical/position_store_v2.db
+Canonical stores: game_store.db (replayable games) + position_teacher_store.db (pathless labels).
+See training/CANONICAL_DATASTORE.md for the two-database architecture.
 New self-play games should land in binary shards and be ingested via position_store.py.
 
 STORAGE MODEL

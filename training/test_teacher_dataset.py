@@ -100,6 +100,150 @@ def test_golden_vector_packed_hash_roundtrip() -> None:
         assert verify_stored_canonical(packed, stored)
 
 
+def test_friend_state_rejects_missing_current_player() -> None:
+    from teacher_dataset.friend_state import parse_friend_state
+
+    with pytest.raises(KeyError, match="state.currentPlayer"):
+        parse_friend_state(
+            {
+                "state": {
+                    "player0Cell": 4,
+                    "player1Cell": 76,
+                    "player0Walls": 10,
+                    "player1Walls": 10,
+                    "horizontalWalls": 0,
+                    "verticalWalls": 0,
+                }
+            }
+        )
+
+
+def test_friend_state_rejects_side_to_move_only() -> None:
+    """sideToMove is a legacy alias; parse_friend_state must not silently accept it."""
+    from teacher_dataset.friend_state import parse_friend_state
+
+    with pytest.raises(KeyError, match="state.currentPlayer"):
+        parse_friend_state(
+            {
+                "state": {
+                    "player0Cell": 4,
+                    "player1Cell": 76,
+                    "player0Walls": 10,
+                    "player1Walls": 10,
+                    "horizontalWalls": 0,
+                    "verticalWalls": 0,
+                    "sideToMove": 0,
+                }
+            }
+        )
+
+
+def test_sidecar_iter_rejects_bad_magic(tmp_path: Path) -> None:
+    import gzip
+
+    from teacher_dataset.sidecar_reader import iter_sidecar_records
+
+    bad = tmp_path / "bad.policy.bin.gz"
+    with gzip.open(bad, "wb") as f:
+        f.write(b"BADMAGIC" + b"\x00" * 10)
+    with pytest.raises(ValueError, match="TIQSIDE1"):
+        iter_sidecar_records(bad)
+
+
+def test_sidecar_decode_rejects_truncated_record() -> None:
+    from teacher_dataset.sidecar_reader import decode_record
+
+    with pytest.raises(ValueError, match="record too short"):
+        decode_record(b"\x01" + b"\x00" * 10)
+
+
+def test_sidecar_decode_rejects_length_mismatch() -> None:
+    from teacher_dataset.sidecar_reader import decode_record
+
+    n = 2
+    raw = bytes([n]) + bytes(32) + bytes(3)
+    with pytest.raises(ValueError, match="record length mismatch"):
+        decode_record(raw)
+
+
+def test_sidecar_decode_rejects_move_code_out_of_range() -> None:
+    import struct
+
+    from teacher_dataset.sidecar_reader import decode_record
+
+    n = 1
+    raw = bytes([n]) + bytes(32) + bytes([136]) + struct.pack("<H", 0)
+    with pytest.raises(ValueError, match="move code 136 out of range"):
+        decode_record(raw)
+
+
+def test_sidecar_decode_accepts_all_valid_move_codes() -> None:
+    """All move codes 0..135 must be accepted without ValueError."""
+    import struct
+
+    from teacher_dataset.sidecar_reader import decode_record
+
+    for code in range(136):
+        n = 1
+        raw = bytes([n]) + bytes(32) + bytes([code]) + struct.pack("<H", 32768)
+        rec = decode_record(raw)
+        assert rec.move_codes == (code,)
+
+
+def test_build_teacher_dataset_manifest_structure(tmp_path: Path) -> None:
+    """build_teacher_dataset writes manifest.json + schema.json, no .partial files, promotion_allowed=False."""
+    import sqlite3
+
+    from teacher_dataset.build import build_teacher_dataset
+    from teacher_dataset.schema import TEACHER_DATASET_SCHEMA_VERSION
+
+    db = tmp_path / "teacher.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE positions (
+            position_id INTEGER PRIMARY KEY,
+            canonical_hash BLOB NOT NULL,
+            packed_state BLOB NOT NULL,
+            side_to_move INTEGER NOT NULL DEFAULT 0,
+            total_visits INTEGER NOT NULL DEFAULT 0,
+            source_flags INTEGER
+        );
+        CREATE TABLE labels (
+            label_id INTEGER PRIMARY KEY,
+            position_id INTEGER NOT NULL,
+            label_type TEXT NOT NULL,
+            value REAL,
+            best_move_u8 INTEGER,
+            source TEXT,
+            payload_json TEXT
+        );
+        CREATE TABLE observations (
+            observation_id INTEGER PRIMARY KEY,
+            position_id INTEGER NOT NULL,
+            source_cohort TEXT,
+            visit_count INTEGER,
+            p0_wins INTEGER,
+            p1_wins INTEGER,
+            draws INTEGER
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    out_dir = tmp_path / "candidate"
+    manifest = build_teacher_dataset(output_dir=out_dir, sqlite_db=db)
+
+    assert (out_dir / "manifest.json").exists(), "manifest.json must exist after build"
+    assert (out_dir / "schema.json").exists(), "schema.json must exist after build"
+    assert manifest["schema_version"] == TEACHER_DATASET_SCHEMA_VERSION
+    assert manifest["promotion_allowed"] is False
+
+    partial_files = list(out_dir.rglob("*.partial"))
+    assert partial_files == [], f"partial files must not remain after build: {partial_files}"
+
+
 def test_policy_lookup_requires_packed_identity_not_hash_only() -> None:
     from teacher_dataset.jsonl_policy_index import build_jsonl_policy_index
     from teacher_dataset.policy_lookup import PolicyLookupStats, lookup_teacher_policy

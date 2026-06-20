@@ -87,6 +87,13 @@ training/data/zero_teacher/scrape/api_samples.json
 training/data/zero_teacher/scrape/meta.json
 training/data/zero_teacher/labels/*.jsonl
 training/_stats_tmp.py
+# Local scratch / diagnostic scripts that reference migration-artifact DBs (task 9)
+training/_progress.py
+training/_breakdown.py
+# DuckDB write-ahead log and temporary files (task 10)
+training/data/*.duckdb
+training/data/*.duckdb.wal
+training/data/*.duckdb.tmp
 engine/worktrees/
 
 # Small training metadata is OK to track if needed:

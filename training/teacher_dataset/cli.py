@@ -92,3 +92,53 @@ def cmd_benchmark_teacher_readers(args) -> int:
 def cmd_reconcile_teacher_source(args) -> int:
     print(json.dumps(reconcile_teacher_counts(args.teacher_db), indent=2))
     return 0
+
+
+def cmd_verify_candidate(args) -> int:
+    """Read-only post-build verification: manifest gates, no partial files, row counts.
+
+    Does NOT promote. Run --promote step explicitly after this passes.
+    """
+    output_dir = getattr(args, "output", TEACHER_DATASET_CANDIDATE_DIR)
+    manifest_path = output_dir / "manifest.json"
+    schema_path = output_dir / "schema.json"
+    issues: list[str] = []
+
+    if not manifest_path.exists():
+        print(json.dumps({"error": "manifest.json missing — build has not completed or was interrupted"}, indent=2))
+        return 1
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    if not schema_path.exists():
+        issues.append("schema.json missing")
+
+    partial_files = [str(p) for p in output_dir.rglob("*.partial")]
+    if partial_files:
+        issues.append(f"partial files remain: {partial_files}")
+
+    counts = manifest.get("counts", {})
+    gate_status = {
+        "promotion_allowed": manifest.get("promotion_allowed", False),
+        "engine_parity_verified": manifest.get("engine_parity_verified", False),
+        "cross_language_position_parity": manifest.get("cross_language_position_parity", False),
+    }
+    unresolved = manifest.get("policy_resolution", {}).get("unresolved", 0)
+    if unresolved:
+        issues.append(f"unresolved_policies={unresolved}")
+
+    result = {
+        "candidate_dir": str(output_dir),
+        "manifest_exists": True,
+        "schema_exists": schema_path.exists(),
+        "partial_files": partial_files,
+        "schema_version": manifest.get("schema_version"),
+        "created_at": manifest.get("created_at"),
+        "counts": counts,
+        "gate_status": gate_status,
+        "policy_resolution": manifest.get("policy_resolution", {}),
+        "issues": issues,
+        "ready_for_promotion": len(issues) == 0 and gate_status["engine_parity_verified"],
+    }
+    print(json.dumps(result, indent=2))
+    return 0 if not issues else 1

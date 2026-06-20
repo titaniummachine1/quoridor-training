@@ -40,7 +40,10 @@ def decode_record(raw: bytes) -> SidecarRecord:
     values: list[int] = []
     pos = 33
     for _ in range(n):
-        moves.append(raw[pos])
+        code = raw[pos]
+        if code > 135:
+            raise ValueError(f"move code {code} out of range 0..135 at offset {pos}")
+        moves.append(code)
         values.append(struct.unpack_from("<H", raw, pos + 1)[0])
         pos += 3
     return SidecarRecord(canonical, tuple(moves), tuple(values))

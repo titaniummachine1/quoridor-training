@@ -83,6 +83,7 @@ from teacher_dataset.cli import (
     cmd_freeze_teacher_reference,
     cmd_reconcile_teacher_source,
     cmd_stats_teacher_dataset,
+    cmd_verify_candidate,
     cmd_verify_teacher_policies,
 )
 from teacher_dataset.config import TEACHER_CATALOG_DB, TEACHER_DATASET_CANDIDATE_DIR
@@ -164,8 +165,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("path", type=Path)
     ingest.add_argument("--dry-run", action="store_true")
 
-    sub.add_parser("audit-canonical", help="alias for audit-game-store")
-    sub.add_parser("audit-game-store", help="integrity audit of replayable game store")
+    sub.add_parser("audit-canonical", help="alias for audit-game-store (game store only; see also audit-teacher-store)")
+    sub.add_parser("audit-game-store", help="integrity audit of replayable game store (game_store.db)")
     sub.add_parser("audit-teacher-store", help="integrity audit of pathless teacher store")
     sub.add_parser(
         "teacher-semantic-checksum",
@@ -193,6 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     bench_ds = sub.add_parser("benchmark-teacher-readers", help="benchmark DuckDB/Parquet read throughput")
     bench_ds.add_argument("--catalog", type=Path, default=TEACHER_CATALOG_DB)
     sub.add_parser("reconcile-teacher-source", help="explain SQLite label counts vs friend source records")
+    verify_cand = sub.add_parser(
+        "verify-candidate",
+        help="read-only post-build check: manifest gates, no partial files, policy resolution (does NOT promote)",
+    )
+    verify_cand.add_argument("--output", type=Path, default=TEACHER_DATASET_CANDIDATE_DIR)
     sub.add_parser("stats-game-store", help="summary counts for game store")
     sub.add_parser("stats-teacher-store", help="summary counts for teacher store")
     sub.add_parser("verify-codec-parity", help="cross-store position codec/hash parity check")
@@ -203,7 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
     prove_reb = sub.add_parser("prove-rebuild", help="rebuild disposable copy and compare semantic checksums")
     prove_reb.add_argument("--migration-run-id", required=True)
     sub.add_parser("storage-audit", help="measure table/index/payload storage using SQLite page stats")
-    sub.add_parser("stats", help="alias for stats-game-store")
+    sub.add_parser("stats", help="alias for stats-game-store (game store only; use stats-teacher-store for teacher DB)")
     storage = sub.add_parser("storage-report", help="print measured storage usage and source-size comparisons")
     storage.add_argument("source", nargs="*", type=Path)
     sub.add_parser("relabel-queue", help="show pending relabel work")
@@ -253,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     shard_smoke.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
 
     # Back-compat aliases
-    sub.add_parser("audit", help="alias for audit-canonical")
+    sub.add_parser("audit", help="alias for audit-canonical → audit-game-store (game store only)")
     ig = sub.add_parser("import-games", help="alias for import-legacy-games")
     ig.add_argument("path", type=Path)
     ig.add_argument("--dry-run", action="store_true")
@@ -494,6 +500,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_benchmark_teacher_readers(args)
     if cmd == "reconcile-teacher-source":
         return cmd_reconcile_teacher_source(args)
+    if cmd == "verify-candidate":
+        return cmd_verify_candidate(args)
     if cmd == "verify-codec-parity":
         print_json(verify_codec_parity(args.db, args.teacher_db))
         return 0
