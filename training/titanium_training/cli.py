@@ -121,6 +121,10 @@ def cmd_train(args) -> int:
         cmd += ["--seed", str(cfg["seed"])]
     if cfg.get("val_split") is not None:
         cmd += ["--val-split", str(cfg["val_split"])]
+    if cfg.get("coverage_min") is not None:
+        cmd += ["--coverage-min", str(cfg["coverage_min"])]
+    if cfg.get("min_val") is not None:
+        cmd += ["--min-val", str(cfg["min_val"])]
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     (Path(out_dir) / "resolved_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return _run_training_script(_trainer_script(), cmd)

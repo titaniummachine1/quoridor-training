@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""Preflight before NNUE training — binary, parity, eval-batch schema.
-
-Standalone; does not modify training logic.
-
-    python training/nnue_cli.py preflight
-"""
-
+"""Preflight before NNUE training — binary, parity, eval-batch, packed-state path."""
 from __future__ import annotations
 
 import json
+import struct
 import subprocess
 import sys
 from pathlib import Path
 
 from titanium_training.paths import REPO_ROOT, TRAINING_ROOT
+from titanium_training.store.state import PositionState
 
 ROOT = REPO_ROOT
 BIN = REPO_ROOT / "engine" / "target" / "release" / "titanium.exe"
+PACKED_RECORD = struct.Struct("<I24s")
 
 
 def fail(msg: str) -> None:
@@ -26,6 +23,43 @@ def fail(msg: str) -> None:
 
 def pass_(msg: str) -> None:
     print(f"PASS: {msg}")
+
+
+def _check_eval_packed_batch() -> None:
+    packed = PositionState.initial().packed_state()
+    payload = PACKED_RECORD.pack(0, packed)
+    batch = subprocess.run(
+        [str(BIN), "eval-packed-batch"],
+        input=payload,
+        capture_output=True,
+        timeout=60,
+        check=True,
+    )
+    lines = [ln for ln in batch.stdout.decode().splitlines() if ln.strip()]
+    if not lines:
+        fail("eval-packed-batch returned no JSON lines")
+    rec = json.loads(lines[0])
+    if not rec.get("ok"):
+        fail(f"eval-packed-batch failed: {rec.get('error')}")
+    if "legal_wall_count" not in rec:
+        fail("eval-packed-batch record missing legal_wall_count")
+    pass_(f"eval-packed-batch legal_wall_count={rec['legal_wall_count']}")
+
+
+def _readiness_level() -> str:
+    try:
+        from titanium_training.data.teacher_value import scan_packed_state_coverage
+        from titanium_training.paths import ACTIVE_TEACHER_DATASET
+
+        if not (ACTIVE_TEACHER_DATASET / "manifest.json").is_file():
+            return "SMOKE READY (dataset absent locally)"
+        stats = scan_packed_state_coverage(ACTIVE_TEACHER_DATASET, max_scan=2_048, batch_size=256)
+        cov = float(stats.get("coverage_percentage", 0))
+        if cov >= 99.9:
+            return "FULL-CORPUS READY (sampled coverage >= 99.9%)"
+        return f"SMOKE READY (sampled coverage {cov:.2f}%)"
+    except Exception as e:
+        return f"SMOKE READY (coverage probe skipped: {e})"
 
 
 def main() -> int:
@@ -62,15 +96,19 @@ def main() -> int:
     lines = [ln for ln in batch.stdout.splitlines() if ln.strip()]
     if not lines:
         fail("eval-batch returned no JSON lines")
-    try:
-        rec = json.loads(lines[0])
-    except json.JSONDecodeError as e:
-        fail(f"eval-batch JSON parse error: {e}")
+    rec = json.loads(lines[0])
     if "legal_wall_count" not in rec:
         fail("eval-batch record missing legal_wall_count")
     pass_(f"eval-batch legal_wall_count={rec['legal_wall_count']}")
 
-    print("\nREADY: training preflight passed")
+    _check_eval_packed_batch()
+
+    level = _readiness_level()
+    print(f"\nREADINESS: {level}")
+    if "FULL-CORPUS READY" in level:
+        print("\nREADY: full-corpus value-NNUE preflight passed")
+    else:
+        print("\nREADY: smoke / bounded teacher preflight passed (not full-corpus)")
     return 0
 
 

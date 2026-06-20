@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded teacher-value smoke: promoted dataset + real HalfPW training path."""
+"""Bounded teacher-value smoke: promoted dataset + packed-state HalfPW path."""
 from __future__ import annotations
 
 import argparse
@@ -51,7 +51,7 @@ def main() -> int:
         return _fail("manifest hash mismatch")
     _pass(f"manifest {manifest.get('manifest_hash', '')[:16]}…")
 
-    print("=== Phase 2: featurize + micro-train ===")
+    print("=== Phase 2: featurize + train ===")
     t0 = time.perf_counter()
     train_cmd = [
         sys.executable,
@@ -60,22 +60,25 @@ def main() -> int:
         str(cfg.get("data", "training/data/teacher_dataset")),
         "--out-dir",
         str(ckpt_dir),
-        "--micro",
         "--cpu",
         "--epochs",
-        str(cfg.get("epochs", 1)),
+        str(cfg.get("epochs", 2)),
         "--batch",
-        str(cfg.get("batch", 16)),
+        str(cfg.get("batch", 32)),
         "--lr",
         str(cfg.get("lr", 5e-4)),
         "--checkpoint-steps",
-        str(cfg.get("checkpoint_steps", 4)),
+        str(cfg.get("checkpoint_steps", 32)),
         "--val-split",
-        str(cfg.get("val_split", 0.05)),
+        str(cfg.get("val_split", 0.08)),
         "--max-samples",
-        str(cfg.get("max_samples", 512)),
+        str(cfg.get("max_samples", 4096)),
         "--seed",
         str(cfg.get("seed", 0)),
+        "--min-val",
+        str(cfg.get("min_val", 64)),
+        "--coverage-min",
+        str(cfg.get("coverage_min", 1.0)),
     ]
     env = dict(__import__("os").environ)
     env["PYTHONPATH"] = str(TRAINING_ROOT)
@@ -88,20 +91,31 @@ def main() -> int:
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     if meta.get("synthetic_fallback_used"):
         return _fail("synthetic fallback flagged true")
-    _pass(f"train {meta.get('featurized_samples')} samples ({time.perf_counter()-t0:.1f}s)")
+    if meta.get("featurization_mode") != "packed-state-direct":
+        return _fail(f"unexpected featurization mode: {meta.get('featurization_mode')}")
+    if int(meta.get("validation_count", 0)) <= 0:
+        return _fail("validation_count is zero")
+    if float(meta.get("coverage_percentage", 0)) < 100.0:
+        return _fail(f"coverage below 100%: {meta.get('coverage_percentage')}")
+    _pass(
+        f"train {meta.get('train_count')} val {meta.get('validation_count')} "
+        f"({time.perf_counter()-t0:.1f}s)"
+    )
 
     ckpts = sorted(ckpt_dir.glob("ckpt_step*.pt")) or sorted(ckpt_dir.glob("ckpt_epoch*.pt"))
     if not ckpts:
         return _fail("no checkpoint written")
+    initial_ckpt = ckpts[0]
 
     print("=== Phase 3: resume ===")
     resume_cmd = train_cmd + ["--resume", "--ckpt", str(ckpts[-1])]
     rc = subprocess.call(resume_cmd, cwd=str(REPO_ROOT), env=env)
     if rc != 0:
         return _fail(f"resume exited {rc}")
+    ckpts = sorted(ckpt_dir.glob("ckpt_step*.pt")) or sorted(ckpt_dir.glob("ckpt_epoch*.pt"))
     _pass("resume OK")
 
-    print("=== Phase 4: export ===")
+    print("=== Phase 4: export + parity ===")
     export_out = ckpt_dir / "net_weights_teacher_smoke.bin"
     rc = subprocess.call(
         [
@@ -118,7 +132,16 @@ def main() -> int:
     )
     if rc != 0 or not export_out.is_file():
         return _fail("export failed")
-    _pass(f"export -> {export_out.name}")
+
+    from titanium_training.validation.export_parity import verify_export_parity
+
+    parity = verify_export_parity(ckpts[-1], export_out)
+    if not parity.passed:
+        return _fail(
+            f"export parity failed (max_err={parity.max_parity_error}): "
+            + "; ".join(parity.details[:5])
+        )
+    _pass(f"export parity max_err={parity.max_parity_error}")
 
     cfg_hash = hashlib.sha256(json.dumps(cfg, sort_keys=True).encode()).hexdigest()
     run_meta = {
@@ -128,10 +151,20 @@ def main() -> int:
         "config_sha256": cfg_hash,
         "dataset_path": meta.get("dataset_path"),
         "dataset_manifest_sha256": meta.get("dataset_manifest_sha256"),
-        "featurized_samples": meta.get("featurized_samples"),
+        "featurization_mode": meta.get("featurization_mode"),
+        "engine_commit": meta.get("engine_commit"),
+        "feature_schema": meta.get("feature_schema"),
+        "candidate_labels": meta.get("candidate_labels"),
+        "featurized_rows": meta.get("featurized_samples"),
+        "coverage_percentage": meta.get("coverage_percentage"),
+        "train_count": meta.get("train_count"),
+        "validation_count": meta.get("validation_count"),
         "target_definition": meta.get("target_definition"),
         "feature_source": meta.get("feature_source"),
+        "exported_net_parity_status": "PASS",
+        "maximum_parity_error": parity.max_parity_error,
         "synthetic_fallback_used": False,
+        "initial_checkpoint": str(initial_ckpt.relative_to(REPO_ROOT)).replace("\\", "/"),
         "checkpoint": str(ckpts[-1].relative_to(REPO_ROOT)).replace("\\", "/"),
         "export_path": str(export_out.relative_to(REPO_ROOT)).replace("\\", "/"),
     }

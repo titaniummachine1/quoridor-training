@@ -345,6 +345,12 @@ def main():
                     help="Cap teacher-dataset samples when --data is a dataset directory")
     ap.add_argument("--seed",             type=int, default=0,
                     help="Shuffle seed for teacher-dataset sampling")
+    ap.add_argument("--coverage-min",     type=float, default=None,
+                    help="Minimum featurization coverage ratio for teacher dataset")
+    ap.add_argument("--min-val",          type=int, default=0,
+                    help="Minimum validation samples (teacher dataset)")
+    ap.add_argument("--min-train",        type=int, default=1,
+                    help="Minimum training samples")
     args = ap.parse_args()
 
     if args.micro:
@@ -382,13 +388,15 @@ def main():
             max_samples=int(getattr(args, "max_samples", 0) or 10_000),
             min_samples=4 if args.micro else 64,
             seed=int(getattr(args, "seed", 0) or 0),
+            coverage_min=args.coverage_min,
         )
         meta_path = out_dir / "run_metadata.json"
         meta_path.write_text(json.dumps(teacher_meta, indent=2), encoding="utf-8")
         print(
             f"  {len(records)} teacher-value positions  "
             f"(manifest {teacher_meta['dataset_manifest_sha256'][:16]}…, "
-            f"prefix-index {teacher_meta['prefix_index_positions']})"
+            f"mode {teacher_meta['featurization_mode']}, "
+            f"coverage {teacher_meta.get('coverage_percentage', 0):.2f}%)"
         )
     elif data_path.suffix == ".db":
         try:
@@ -430,11 +438,31 @@ def main():
         print("  no training positions (empty game list or filters)")
         sys.exit(0)
 
-    random.shuffle(records)
-    if args.val_split <= 0 or len(records) < 4:
+    from titanium_training.data.split import ValidationSplitError, deterministic_train_val_split
+
+    split_meta: dict | None = None
+    if teacher_meta is not None and args.val_split > 0:
+        min_val = args.min_val if args.min_val > 0 else 64
+        try:
+            train_recs, val_recs, split_meta = deterministic_train_val_split(
+                records,
+                val_fraction=args.val_split,
+                seed=int(args.seed),
+                min_val=min_val,
+                min_train=max(1, args.min_train),
+            )
+        except ValidationSplitError as e:
+            print(f"Training blocked: {e}")
+            sys.exit(1)
+        teacher_meta.update(split_meta)
+        (out_dir / "run_metadata.json").write_text(
+            json.dumps(teacher_meta, indent=2), encoding="utf-8"
+        )
+    elif args.val_split <= 0 or len(records) < 4:
         val_recs = []
         train_recs = records
     else:
+        random.shuffle(records)
         n_val = max(1, int(len(records) * args.val_split))
         val_recs = records[:n_val]
         train_recs = records[n_val:]
