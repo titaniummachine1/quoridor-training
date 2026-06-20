@@ -1,5 +1,32 @@
 # Dataset
 
+## Canonical packed position state
+
+The promoted teacher dataset stores board identity in a fixed **24-byte little-endian** blob (`packed_state` column in positions Parquet). This is the single authoritative format shared by:
+
+| Component | Location |
+| --------- | -------- |
+| Python codec | `training/titanium_training/store/state.py` — `PositionState.packed_state()` / `unpack_state()` |
+| Rust importer | `tools/position_store_importer/src/position_state.rs` — `PositionState::packed_state()` |
+| Engine decode | `engine/src/acev13/packed_state.rs` — `ace_game_from_packed()` |
+| Featurization | `titanium eval-packed-batch` (stdin: u32 row + 24 bytes → JSON HalfPW features) |
+
+| Field | Offset | Size | Description |
+| ----- | ------ | ---- | ----------- |
+| schema version | 0 | 1 | Must be `1` (`POSITION_SCHEMA_VERSION`) |
+| player0 cell | 1 | 1 | Pawn cell 0–80 (ACE indexing) |
+| player1 cell | 2 | 1 | Pawn cell 0–80 |
+| player0 walls left | 3 | 1 | 0–10 |
+| player1 walls left | 4 | 1 | 0–10 |
+| side to move | 5 | 1 | Python `side_to_move` (`0`/`1`); maps to Ace `turn` as `1` when Python `0`, else `0` |
+| reserved | 6–7 | 2 | Must be zero |
+| horizontal walls | 8–15 | 8 | u64 LE bitmask, 64 slots |
+| vertical walls | 16–23 | 8 | u64 LE bitmask, 64 slots |
+
+Integrity: `canonical_hash = SHA-256(packed_state)` (32 bytes). Fast hash: Blake2b-8 over packed bytes.
+
+Teacher-value training featurizes rows via **direct packed-state eval** (`eval-packed-batch`), not move-history replay.
+
 ## Active teacher dataset (promoted v10)
 
 | Property | Value |

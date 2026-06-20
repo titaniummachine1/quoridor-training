@@ -31,7 +31,7 @@ Smoke verifies:
 2. Micro-train on a **tiny game subset** (WDL path) — `smoke.yaml`
 3. Checkpoint write, resume, engine-format export
 
-**Teacher-value smoke** (`value_nnue_smoke.yaml`) uses the promoted Parquet dataset, game-store move-prefix index, eval-batch featurization, and teacher `value_i16` targets (no synthetic WDL fallback):
+**Teacher-value smoke** (`value_nnue_smoke.yaml`) uses the promoted Parquet dataset, **`titanium eval-packed-batch`** on canonical 24-byte `packed_state`, deterministic train/val split, teacher `value_i16` targets, exported-net engine parity (no synthetic WDL fallback):
 
 ```powershell
 python training/nnue_cli.py smoke-teacher --config training/configs/value_nnue_smoke.yaml
