@@ -77,6 +77,12 @@ def is_forbidden_bundle_path(rel: str) -> bool:
         return True
     if "/.pytest-temp/" in f"/{rel}/" or rel.endswith("/.pytest-temp"):
         return True
+    if rel.startswith("training/.pytest_cache/") or rel == "training/.pytest_cache":
+        return True
+    if rel == "docs/maintenance/repository_inventory.json":
+        return True
+    if rel.startswith("docs/maintenance/gate_evidence_bundle_"):
+        return True
     if rel.startswith("training/data/"):
         return True
     if rel.startswith("training/experiments/"):
