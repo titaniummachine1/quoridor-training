@@ -359,9 +359,6 @@ def run_promotion_gate_audits(
         and not unreadable
     )
     bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
-    bundle["bundle_path"] = str(bundle_path).replace("\\", "/")
-    bundle["bundle_sha256"] = sha256_file(bundle_path)
-    bundle_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
 
     print(f"[gate-audits] bundle written: {bundle_path}", flush=True)
     print(f"[gate-audits] all_teacher_gates_passed={all_teacher_passed}", flush=True)
