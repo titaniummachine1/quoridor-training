@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from position_store_config import ROOT
+from titanium_training.store.config import ROOT
 
 from .schema import POLICY_CHUNK_MAGIC, POLICY_INDEX_MAGIC
 

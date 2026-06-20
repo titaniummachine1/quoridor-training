@@ -11,7 +11,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from position_store_config import ROOT
+from titanium_training.store.config import ROOT
 
 try:
     import resource

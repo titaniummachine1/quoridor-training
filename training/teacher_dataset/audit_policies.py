@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import REPORT_DIR, ROOT, TEACHER_STORE_DB
+from titanium_training.store.config import REPORT_DIR, ROOT, TEACHER_STORE_DB
 
 from .config import DATASET_REPORTS_DIR
 from .schema import (

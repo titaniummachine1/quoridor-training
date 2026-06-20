@@ -6,8 +6,8 @@ import zlib
 from functools import lru_cache
 from pathlib import Path
 
-from position_store_config import TEACHER_SIDECARS
-from position_store_lib import policy_semantic_hash
+from titanium_training.store.config import TEACHER_SIDECARS
+from titanium_training.store.lib import policy_semantic_hash
 
 from .sidecar_reader import SidecarRecord, iter_sidecar_records
 

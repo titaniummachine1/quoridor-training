@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import FRIEND_CORPUS_DIR, REPORT_DIR, ROOT, TEACHER_STORE_DB
-from position_store_friend import discover_friend_shards
-from position_store_state import PositionState
+from titanium_training.store.config import FRIEND_CORPUS_DIR, REPORT_DIR, ROOT, TEACHER_STORE_DB
+from titanium_training.store.friend import discover_friend_shards
+from titanium_training.store.state import PositionState
 
 from .canonical_identity import canonical_hash_from_packed
 from .friend_state import parse_friend_state

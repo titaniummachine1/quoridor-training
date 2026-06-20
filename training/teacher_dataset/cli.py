@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from position_store_config import REPORT_DIR, TEACHER_STORE_DB
+from titanium_training.store.config import REPORT_DIR, TEACHER_STORE_DB
 
 from .audit_policies import audit_teacher_policies, diagnose_sidecar_root_cause, write_policy_audit_report
 from .build import build_teacher_dataset

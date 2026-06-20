@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from position_store_config import REPORT_DIR, ROOT
+from titanium_training.store.config import REPORT_DIR, ROOT
 
 from .promotion_gates import compute_manifest_hash, git_head, sha256_file
 

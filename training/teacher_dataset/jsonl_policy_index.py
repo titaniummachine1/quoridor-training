@@ -6,9 +6,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from position_store_config import FRIEND_CORPUS_DIR
-from position_store_friend import discover_friend_shards
-from position_store_lib import _alpha_action_to_move_u8, policy_semantic_hash
+from titanium_training.store.config import FRIEND_CORPUS_DIR
+from titanium_training.store.friend import discover_friend_shards
+from titanium_training.store.lib import _alpha_action_to_move_u8, policy_semantic_hash
 from .friend_state import parse_friend_state
 from .sidecar_reader import SidecarRecord
 

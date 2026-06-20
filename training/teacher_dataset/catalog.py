@@ -8,7 +8,7 @@ from typing import Any
 
 import duckdb
 
-from position_store_config import ROOT
+from titanium_training.store.config import ROOT
 
 from .config import TEACHER_CATALOG_DB, TEACHER_DATASET_CANDIDATE_MANIFEST
 from .schema import CATALOG_SCHEMA_VERSION

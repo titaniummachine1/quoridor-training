@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from position_store_config import ROOT, TEACHER_SIDECARS
+from titanium_training.store.config import ROOT, TEACHER_SIDECARS
 
 from .jsonl_policy_index import build_jsonl_policy_index
 from .policy_recovery import recover_policy_record

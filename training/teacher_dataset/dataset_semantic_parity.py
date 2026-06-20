@@ -11,7 +11,7 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
-from position_store_config import REPORT_DIR, ROOT, TEACHER_STORE_DB
+from titanium_training.store.config import REPORT_DIR, ROOT, TEACHER_STORE_DB
 
 
 @dataclass

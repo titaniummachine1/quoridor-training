@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import REPORT_DIR, ROOT
+from titanium_training.store.config import REPORT_DIR, ROOT
 
 from .evidence_canonical import (
     EVIDENCE_SCHEMA_VERSION,

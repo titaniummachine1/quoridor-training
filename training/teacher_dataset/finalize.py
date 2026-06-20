@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import ROOT, TEACHER_STORE_DB
+from titanium_training.store.config import ROOT, TEACHER_STORE_DB
 
 from .canonical_identity import spec_document
 from .promotion_gates import apply_promotion_allowed, compute_manifest_hash, gate_evidence, git_head

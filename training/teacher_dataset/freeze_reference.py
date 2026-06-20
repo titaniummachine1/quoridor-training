@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import BACKUP_DIR, ROOT, TEACHER_STORE_DB
-from position_store_lib import db_summary
-from position_store_teacher import teacher_semantic_checksum
+from titanium_training.store.config import BACKUP_DIR, ROOT, TEACHER_STORE_DB
+from titanium_training.store.lib import db_summary
+from titanium_training.store.teacher import teacher_semantic_checksum
 
 from .config import TEACHER_REFERENCE_DIR
 from .schema import TEACHER_DATASET_SCHEMA_VERSION

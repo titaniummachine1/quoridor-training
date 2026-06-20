@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import REPORT_DIR, ROOT
+from titanium_training.store.config import REPORT_DIR, ROOT
 
 from .catalog import benchmark_readers, build_teacher_catalog
 from .dataset_semantic_parity import audit_dataset_semantic_parity, write_semantic_parity_report
@@ -103,7 +103,7 @@ def run_promotion_gate_audits(
         counts={"hash_only_mismatches": getattr(parity, "hash_only_mismatches", 0)},
     )
 
-    from position_store_lib import policy_semantic_hash
+    from titanium_training.store.lib import policy_semantic_hash
 
     algo_path = reports_dir / f"policy_hash_algorithm_parity_{candidate_name}_{stamp}.json"
     sample_hash = policy_semantic_hash([128, 129], [0.5, 0.5])

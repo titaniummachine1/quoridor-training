@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from position_store_config import ROOT, TEACHER_SIDECARS
+from titanium_training.store.config import ROOT, TEACHER_SIDECARS
 
 from .config import LEGACY_WRONG_SIDECAR_PREFIX
 

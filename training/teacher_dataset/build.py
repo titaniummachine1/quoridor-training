@@ -12,7 +12,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from position_store_config import ROOT, TEACHER_STORE_DB
+from titanium_training.store.config import ROOT, TEACHER_STORE_DB
 
 from .audit_policies import audit_teacher_policies
 from .canonical_identity import spec_document
@@ -216,7 +216,7 @@ def build_teacher_dataset(
     # policy_quarantined == 0.  The build itself never sets promotion_allowed=True.
     promotion_gates = {
         # Teacher dataset position codec parity (packed_state + canonical_hash).
-        # Verified by: python training/train.py audit-position-parity
+        # Verified by: python training/nnue_cli.py train audit-position-parity
         "cross_language_position_parity": False,
         "canonical_hash_parity": False,
         # Policy semantic hash round-trip: policy_semantic_hash(Rust) == policy_semantic_hash(Python).

@@ -7,7 +7,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from position_store_config import ROOT
+from titanium_training.store.config import ROOT
 
 from .promotion_gates import sha256_file
 

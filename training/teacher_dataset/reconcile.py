@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from position_store_config import TEACHER_STORE_DB
+from titanium_training.store.config import TEACHER_STORE_DB
 
 
 def reconcile_teacher_counts(db_path: Path = TEACHER_STORE_DB) -> dict[str, Any]:

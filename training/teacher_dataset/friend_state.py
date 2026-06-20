@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from position_store_state import PositionState
+from titanium_training.store.state import PositionState
 
 
 def parse_friend_state(obj: dict[str, Any]) -> PositionState:

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from position_store_config import REPORT_DIR, TEACHER_SIDECARS, TEACHER_STORE_DB
+from titanium_training.store.config import REPORT_DIR, TEACHER_SIDECARS, TEACHER_STORE_DB
 
 from .policy_binary import EncodedPolicy
 from .sidecar_reader import SidecarRecord, iter_sidecar_records

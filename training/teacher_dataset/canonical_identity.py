@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from position_store_state import POSITION_SCHEMA_VERSION
+from titanium_training.store.state import POSITION_SCHEMA_VERSION
 
 CANONICAL_IDENTITY_SPEC_VERSION = 1
 CANONICAL_HASH_ALGORITHM = "sha256"
