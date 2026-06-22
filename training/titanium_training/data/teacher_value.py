@@ -209,6 +209,8 @@ def _eval_record_to_training_row(
         "d0": d0,
         "d1": d1,
         "legal_wall_count": int(rec["legal_wall_count"]),
+        "legal_path_cross_p0": int(rec.get("legal_path_cross_p0", 0)),
+        "legal_path_cross_p1": int(rec.get("legal_path_cross_p1", 0)),
         GOAL_INV_P0: gi0,
         GOAL_INV_P1: gi1,
         PAWN_FWD_P0: rec_field(rec, PAWN_FWD_P0),

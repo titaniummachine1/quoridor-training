@@ -43,7 +43,9 @@ def _check_eval_packed_batch() -> None:
         fail(f"eval-packed-batch failed: {rec.get('error')}")
     if "legal_wall_count" not in rec:
         fail("eval-packed-batch record missing legal_wall_count")
-    pass_(f"eval-packed-batch legal_wall_count={rec['legal_wall_count']}")
+    if "legal_path_cross_p0" not in rec or "legal_path_cross_p1" not in rec:
+        fail("eval-packed-batch record missing legal_path_cross_p0/p1 (rebuild engine)")
+    pass_(f"eval-packed-batch legal_wall_count={rec['legal_wall_count']} legal_path_cross=({rec['legal_path_cross_p0']},{rec['legal_path_cross_p1']})")
 
 
 def _readiness_level() -> str:
@@ -99,7 +101,9 @@ def main() -> int:
     rec = json.loads(lines[0])
     if "legal_wall_count" not in rec:
         fail("eval-batch record missing legal_wall_count")
-    pass_(f"eval-batch legal_wall_count={rec['legal_wall_count']}")
+    if "legal_path_cross_p0" not in rec or "legal_path_cross_p1" not in rec:
+        fail("eval-batch record missing legal_path_cross_p0/p1 (rebuild engine)")
+    pass_(f"eval-batch legal_wall_count={rec['legal_wall_count']} legal_path_cross=({rec['legal_path_cross_p0']},{rec['legal_path_cross_p1']})")
 
     _check_eval_packed_batch()
 

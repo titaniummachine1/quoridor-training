@@ -33,7 +33,7 @@ from titanium_training.models.field_planes import (
 )
 
 NET_H = 32
-WSKIP_LEN = 16
+WSKIP_LEN = 18
 W1C_LEN = 9 * 128 * NET_H
 PO_LEN = 81 * NET_H
 PX_LEN = 81 * NET_H
@@ -184,6 +184,12 @@ def forward(net, rec):
     d_opp_i = int(d_opp)
     out += ws[14] * legal_wall_norm(rec)
     out += ws[15] * opponent_corridor_width(rec, me, d_me_i, d_opp_i)
+    if me == 0:
+        out += ws[16] * rec.get("legal_path_cross_p0", 0) / 128.0
+        out += ws[17] * rec.get("legal_path_cross_p1", 0) / 128.0
+    else:
+        out += ws[16] * rec.get("legal_path_cross_p1", 0) / 128.0
+        out += ws[17] * rec.get("legal_path_cross_p0", 0) / 128.0
     out += _route_score(net, rec)
 
     pawn0, pawn1 = rec["pawn0"], rec["pawn1"]

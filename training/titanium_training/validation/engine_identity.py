@@ -82,6 +82,8 @@ def assert_legal_wall_schema() -> None:
     rec = json.loads(line)
     if rec.get("legal_wall_count") != 128:
         raise RuntimeError(f"legal_wall_count schema mismatch on startpos: {rec.get('legal_wall_count')!r}")
+    if "legal_path_cross_p0" not in rec or "legal_path_cross_p1" not in rec:
+        raise RuntimeError("eval-batch record missing legal_path_cross_p0/p1 (rebuild engine)")
 
 
 def assert_parity_6_of_6() -> None:

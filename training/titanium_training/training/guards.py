@@ -33,7 +33,7 @@ SNAP_DIR = CKPT_DIR / "snapshots"
 ELO_HISTORY = DATA_DIR / "nnue_elo_history.json"
 GUARD_STATE = DATA_DIR / "nnue_guard_state.json"
 NNUE_LOG = DATA_DIR / "nnue_train.log"
-TRAINING_SCHEMA = "halfpw-sparse-route5-ws14-v1"
+TRAINING_SCHEMA = "halfpw-sparse-route5-ws18-v1"
 
 SOFT_CAP_BYTES = 500 * 1024 * 1024
 HARD_CAP_BYTES = 1024 * 1024 * 1024

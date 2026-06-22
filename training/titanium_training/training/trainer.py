@@ -74,7 +74,7 @@ from titanium_training.validation.engine_identity import assert_engine_ready
 # ── constants matching halfpw.py / net.rs ────────────────────────────────────
 
 NET_H     = 32
-WSKIP_LEN = 16
+WSKIP_LEN = 18
 W1C_SHAPE = (9, 128, NET_H)   # pawn buckets × wall slots × hidden
 PO_SHAPE  = (81, NET_H)
 PX_SHAPE  = (81, NET_H)
@@ -91,7 +91,7 @@ NET_BKT  = [(i // 9 // 3) * 3 + (i % 9) // 3 for i in range(81)]
 
 ROOT    = Path(__file__).resolve().parents[3]
 WEIGHTS = ROOT / "engine" / "src" / "titanium" / "net_weights.bin"
-TRAINING_SCHEMA = "halfpw-sparse-route5-ws14-v1"
+TRAINING_SCHEMA = "halfpw-sparse-route5-ws18-v1"
 
 from titanium_training.store.config import GAME_STORE_DB
 from titanium_training.store.guards import LegacyTrainingSourceError, assert_canonical_training_db
@@ -172,9 +172,12 @@ class HalfPW(nn.Module):
         out = out + ws[12] * w_opp_capped * (d_me  <= 4.0).float()
 
         # ws[13]: fragile-lead; ws[14]: legal_wall_count/128; ws[15]: opp corridor width
+        # ws[16]: legal walls crossing my path / 128; ws[17]: legal walls crossing opp path / 128
         out = out + ws[13] * pd * w_opp / 10.0
         out = out + ws[14] * b["legal_wall_norm"].float()
         out = out + ws[15] * b["width_opp"].float()
+        out = out + ws[16] * b["legal_cross_me_norm"].float()
+        out = out + ws[17] * b["legal_cross_opp_norm"].float()
         out = out + (b[ROUTE_ME] * self.route_me).sum(dim=1)
         out = out + (b[ROUTE_OPP] * self.route_opp).sum(dim=1)
         out = out + (b[ROUTE_NEAR_ME] * self.route_near_me).sum(dim=1)
@@ -237,6 +240,14 @@ class QuoridorDataset(Dataset):
             )
         legal_wall_norm = r["legal_wall_count"] / 128.0
 
+        # ws[16]/ws[17]: legal walls crossing my/opp shortest path, side-to-move perspective.
+        if me == 0:
+            legal_cross_me_norm  = r.get("legal_path_cross_p0", 0) / 128.0
+            legal_cross_opp_norm = r.get("legal_path_cross_p1", 0) / 128.0
+        else:
+            legal_cross_me_norm  = r.get("legal_path_cross_p1", 0) / 128.0
+            legal_cross_opp_norm = r.get("legal_path_cross_p0", 0) / 128.0
+
         route_me, route_opp, route_near_me, route_near_opp, route_contested = (
             compact_route_vectors(r, NET_MIRC)
         )
@@ -266,8 +277,10 @@ class QuoridorDataset(Dataset):
             "d_opp":     torch.tensor(d_opp,      dtype=torch.float32),
             "w_me":      torch.tensor(w_me,        dtype=torch.float32),
             "w_opp":     torch.tensor(w_opp,       dtype=torch.float32),
-            "legal_wall_norm": torch.tensor(legal_wall_norm, dtype=torch.float32),
-            "width_opp": torch.tensor(width_opp,   dtype=torch.float32),
+            "legal_wall_norm":     torch.tensor(legal_wall_norm,     dtype=torch.float32),
+            "width_opp":           torch.tensor(width_opp,           dtype=torch.float32),
+            "legal_cross_me_norm": torch.tensor(legal_cross_me_norm,  dtype=torch.float32),
+            "legal_cross_opp_norm":torch.tensor(legal_cross_opp_norm, dtype=torch.float32),
             ROUTE_ME: torch.tensor(route_me, dtype=torch.float32),
             ROUTE_OPP: torch.tensor(route_opp, dtype=torch.float32),
             ROUTE_NEAR_ME: torch.tensor(route_near_me, dtype=torch.float32),
@@ -304,7 +317,7 @@ def load_checkpoint(path, model, optimizer, *, weights_path=WEIGHTS):
     if schema != TRAINING_SCHEMA:
         raise RuntimeError(
             f"checkpoint schema {schema!r} != {TRAINING_SCHEMA!r}; "
-            "do not resume checkpoints trained before ws[14]=legal_wall_count/128"
+            "do not resume checkpoints trained before ws18 (legal_path_cross features)"
         )
     try:
         model.load_state_dict(ckpt["model"])
@@ -502,7 +515,7 @@ def main():
             if "checkpoint schema" not in str(e):
                 raise
             print(f"WARN: {e}")
-            print("  Starting fresh from net_weights.bin (ws[14] legal-wall era)")
+            print("  Starting fresh from net_weights.bin (ws18 era: legal_path_cross features)")
 
     from titanium_training.training.guards import enforce_artifact_cap, post_train_check, pretrain_sanity_ok
     ok, msg = pretrain_sanity_ok(batch=False)

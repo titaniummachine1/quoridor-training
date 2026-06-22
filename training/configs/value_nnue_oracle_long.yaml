@@ -1,0 +1,18 @@
+# Long-run (10 h) continuation of value_nnue_oracle training.
+# Optimal single-thread settings; resumes from latest checkpoint in out_dir.
+data: training/data/teacher_dataset
+max_samples: 50000
+coverage_min: 0.999
+out_dir: training/runs/value_oracle
+epochs: 3000
+batch: 512
+lr: 0.001
+checkpoint_steps: 1000
+val_split: 0.05
+min_val: 64
+seed: 0
+
+teacher_dataset: training/data/teacher_dataset
+active_manifest_sha256: 31a422f25a8c701ebfa72410f59fab9dff52c2717e30985a3f8e6929be007d02
+
+lmr_ready: false
