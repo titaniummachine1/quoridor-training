@@ -362,6 +362,11 @@ def main():
 
     device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
     print(f"Device: {device}")
+    # H=32 net: OMP thread overhead exceeds compute benefit even on 4 cores.
+    # Measured: 1t=128.9ms/step, 4t=177ms/step, 8t=276ms/step.
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+    print(f"Threads: intra=1 inter=1 (tuned for H={NET_H} net)")
 
     try:
         stamp = assert_engine_ready(write_if_missing=True, parity=True)

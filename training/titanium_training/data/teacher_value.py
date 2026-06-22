@@ -337,7 +337,7 @@ def load_teacher_value_training_records(
     min_samples: int = 64,
     seed: int = 0,
     root: Path = REPO_ROOT,
-    batch_size: int = 256,
+    batch_size: int = 512,
     coverage_min: float | None = DEFAULT_COVERAGE_MIN,
     require_full_coverage: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
