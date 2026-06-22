@@ -364,6 +364,8 @@ def main():
                     help="Minimum validation samples (teacher dataset)")
     ap.add_argument("--min-train",        type=int, default=1,
                     help="Minimum training samples")
+    ap.add_argument("--patience",         type=int, default=100,
+                    help="Early-stop after N epochs with no val_loss improvement (0=disabled)")
     args = ap.parse_args()
 
     if args.micro:
@@ -547,8 +549,10 @@ def main():
         return total / n if n else 0.0
 
     end_epoch = start_ep + args.epochs
+    patience = args.patience if not args.micro else 0
+    no_improve = 0
     print(f"\nTraining for {args.epochs} epochs, lr={args.lr}, scale={args.scale}, "
-          f"batch={args.batch}, target=WDL")
+          f"batch={args.batch}, target=WDL, patience={patience or 'disabled'}")
     model.train()
 
     for epoch in range(start_ep, end_epoch):
@@ -588,6 +592,7 @@ def main():
         print(f"  epoch checkpoint -> {ep_file.name}  val_loss={val_loss:.5f}")
         if val_loss < best_val:
             best_val = val_loss
+            no_improve = 0
             save_checkpoint(str(out_dir / "best.pt"), model, optimizer, step, epoch + 1, best_val)
             model.save_weights(out_dir / "net_weights_best.bin")
             print(f"  ** new best val_loss={best_val:.5f}")
@@ -595,6 +600,12 @@ def main():
             # Micro-train has no val split — persist latest weights for checkpoint resume.
             model.save_weights(out_dir / "net_weights_best.bin")
             print(f"  micro: saved latest -> net_weights_best.bin")
+        else:
+            no_improve += 1
+            if patience and no_improve >= patience:
+                print(f"\nEARLY STOP: val_loss has not improved for {patience} consecutive epochs "
+                      f"(best={best_val:.5f}, current={val_loss:.5f}).  Stopping.")
+                break
 
     print(f"\nTraining complete.  Best val_loss={best_val:.5f}")
     print(f"Best weights: {out_dir / 'net_weights_best.bin'}")

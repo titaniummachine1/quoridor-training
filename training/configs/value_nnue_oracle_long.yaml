@@ -5,6 +5,7 @@ max_samples: 50000
 coverage_min: 0.999
 out_dir: training/runs/value_oracle
 epochs: 3000
+patience: 100
 batch: 512
 lr: 0.001
 checkpoint_steps: 1000
